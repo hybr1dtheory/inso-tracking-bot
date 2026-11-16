@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+tbvenv/
+
+# Секрети
+.env
+
+# База даних SQLite
+data/
+*.sqlite3
+*.db
