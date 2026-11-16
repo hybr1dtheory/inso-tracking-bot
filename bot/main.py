@@ -11,6 +11,7 @@ from database.init_db import create_tables
 from database.queries import get_user_by_tg_id, add_new_user
 from middlewares.auth import AuthMiddleware
 from handlers.admin import admin_router
+from handlers.operator import operator_router
 
 
 # Налаштування логування для терміналу
@@ -89,6 +90,7 @@ async def main():
     dp.callback_query.middleware(AuthMiddleware())
     # РЕЄСТРАЦІЯ РОУТЕРІВ
     dp.include_router(admin_router)
+    dp.include_router(operator_router)
     await dp.start_polling(bot)
 
 

@@ -82,3 +82,52 @@ async def update_user_role(db_path: str, user_id: int, new_role: str) -> bool:
     except Exception as e:
         logger.error(f"Помилка оновлення ролі користувача {user_id}: {e}")
         return False
+
+
+async def create_trip(
+    db_path: str, origin: str, destination: str,
+    participant_ids: list[int], interval_min: int, operator_db_id: int
+) -> int | None:
+    '''
+    Атомарно створює поїздку, прив'язує екіпаж та пише подію старту в аудит-лог.
+    Повертає ID створеної поїздки або None у разі помилки.
+    '''
+    route_code = f"{origin} → {destination}"
+
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON;")
+
+            # 1. Створюємо запис поїздки
+            cursor = await db.execute(
+                """
+                INSERT INTO trips (route_code, origin, destination, status, checkin_interval_min, last_checkin_by)
+                VALUES (?, ?, ?, 'ACTIVE', ?, ?)
+                """,
+                (route_code, origin, destination, interval_min, operator_db_id)
+            )
+            trip_id = cursor.lastrowid
+            # 2. Додаємо учасників (перший обраний автоматично стає старшим групи)
+            participants_data = [
+                (trip_id, user_id, 1 if idx == 0 else 0)
+                for idx, user_id in enumerate(participant_ids)
+            ]
+            await db.executemany(
+                "INSERT INTO trip_participants (trip_id, user_id, is_leader) VALUES (?, ?, ?)",
+                participants_data
+            )
+            # 3. Фіксуємо старт в аудит-лозі
+            await db.execute(
+                """
+                INSERT INTO checkin_events (trip_id, actor_user_id, event_type, note)
+                VALUES (?, ?, 'TRIP_STARTED', ?)
+                """,
+                (trip_id, operator_db_id, f"Інтервал чекіну: {interval_min} хв")
+            )
+            # Підтверджуємо всі 3 операції разом
+            await db.commit()
+            return trip_id
+
+    except Exception as e:
+        logger.error(f"Помилка при створенні поїздки {route_code}: {e}")
+        return None
