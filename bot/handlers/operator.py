@@ -1,234 +1,351 @@
 import logging
+from datetime import datetime
 from aiogram import Bot, Router, F
 from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-from config import DB_PATH
-from database.queries import get_all_users, create_trip
-from keyboards.inline import build_traveler_trip_keyboard
+from config import DB_PATH, KYIV_TZ
+from database.queries import (
+    get_all_monitored_trips,
+    get_trip_details,
+    mark_operator_ping_sent,
+    activate_trip,
+    close_trip,
+    cancel_planned_trip
+)
+from handlers.traveler import (
+    utc_str_to_kyiv_str,
+    format_trip_card,
+    notify_other_crew_members
+)
+from keyboards.inline import (
+    get_trip_status_icon,
+    build_checkin_response_keyboard,
+    build_operator_ping_keyboard,
+    build_operator_dashboard_keyboard,
+    build_operator_trip_manage_keyboard,
+    build_operator_close_confirm_keyboard,
+    build_traveler_trip_keyboard
+)
 
 
 logger = logging.getLogger(__name__)
 operator_router = Router()
 
 
-class NewTripFSM(StatesGroup):
-    waiting_for_origin = State()
-    waiting_for_destination = State()
-    waiting_for_crew = State()
-    waiting_for_interval = State()
+def is_operator_or_admin(db_user: dict | None) -> bool:
+    return bool(db_user and db_user["role"] in ("OPERATOR", "ADMIN"))
 
 
-def build_crew_keyboard(users: list[dict], selected_ids: list[int]):
-    '''Будує інлайн-клавіатуру з чекбоксами для мульти-вибору екіпажу.'''
-    builder = InlineKeyboardBuilder()
-    for u in users:
-        is_selected = u["id"] in selected_ids
-        mark = "✅" if is_selected else "⬜️"
-        builder.button(
-            text=f"{mark} {u['full_name']} ({u['role']})",
-            callback_data=f"trip_toggle_user:{u['id']}"
+def format_dashboard_text(trips: list[dict]) -> str:
+    '''Формує зведений текст дашборду всіх активних та запланованих поїздок.'''
+    now_str = datetime.now(KYIV_TZ).strftime("%H:%M:%S")
+    if not trips:
+        return (
+            f"📋 <b>Моніторинг поїздок</b> (оновлено о {now_str})\n\n"
+            "🟢 Наразі немає активних або запланованих відряджень."
         )
-    builder.adjust(1)
-    # Нижній ряд керування
-    controls = InlineKeyboardBuilder()
-    controls.button(
-        text=f"➡️ Далі (обрано: {len(selected_ids)})",
-        callback_data="trip_confirm_crew"
+    active_trips = [t for t in trips if t["status"] == "ACTIVE"]
+    planned_trips = [t for t in trips if t["status"] == "PLANNED"]
+    lines = [
+        f"📋 <b>Панель моніторингу поїздок</b> (станом на {now_str})",
+        f"Активних: <b>{len(active_trips)}</b> | Запланованих: <b>{len(planned_trips)}</b>\n"
+    ]
+    if active_trips:
+        lines.append("🚗 <b>АКТИВНІ ВІДРЯДЖЕННЯ:</b>")
+        for t in active_trips:
+            icon = get_trip_status_icon(t)
+            mins = max(0, t["minutes_ago"] or 0)
+            crew_count = len(t["crew"])
+            leader = next((m["full_name"] for m in t["crew"] if m["is_leader"]), "Невідомо")
+            status_note = ""
+            if mins >= t["checkin_interval_min"]:
+                status_note = " — ⚠️ <b>ЧАС ЧЕКІНУ ВИЙШОВ!</b>"
+            elif t["pending_request_sent_at"]:
+                status_note = " — ⏳ <i>Очікується відповідь</i>"
+            lines.append(
+                f"{icon} <b>#{t['id']} {t['route_code']}</b> ({crew_count} ос., ст.: {leader})\n"
+                f"   └ Чекін: <b>{mins} хв тому</b>{status_note}"
+            )
+        lines.append("")
+    if planned_trips:
+        lines.append("📅 <b>ЗАПЛАНОВАНІ ВИЇЗДИ:</b>")
+        for t in planned_trips:
+            dep_str = utc_str_to_kyiv_str(t["started_at"])
+            leader = next((m["full_name"] for m in t["crew"] if m["is_leader"]), "Невідомо")
+            lines.append(
+                f"📅 <b>#{t['id']} {t['route_code']}</b> (ст.: {leader})\n"
+                f"   └ Виїзд: <b>{dep_str}</b>"
+            )
+    lines.append("\n<i>Оберіть поїздку нижче для перегляду деталей або відправки запиту:</i>")
+    return "\n".join(lines)
+
+
+def format_operator_trip_details(trip: dict) -> str:
+    '''Формує розширену картку конкретної поїздки для оператора.'''
+    icon = get_trip_status_icon(trip)
+    crew_lines = []
+    for m in trip["crew"]:
+        role_tag = " 👑 <i>(Старший групи)</i>" if m["is_leader"] else ""
+        crew_lines.append(f"• {m['full_name']}{role_tag} [ID: <code>{m['tg_id']}</code>]")
+    crew_block = "\n".join(crew_lines)
+    if trip["status"] == "PLANNED":
+        dep_str = utc_str_to_kyiv_str(trip["started_at"])
+        return (
+            f"{icon} <b>Поїздка #{trip['id']} (ЗАПЛАНОВАНА)</b>\n\n"
+            f"📍 Маршрут: <b>{trip['origin']} → {trip['destination']}</b>\n"
+            f"🕒 Запланований виїзд: <b>{dep_str}</b>\n"
+            f"⏱ Інтервал чекіну за СОП: <b>{trip['checkin_interval_min']} хв</b>\n\n"
+            f"👥 <b>Склад групи ({len(trip['crew'])}):</b>\n{crew_block}"
+        )
+    mins = max(0, trip["minutes_ago"] or 0)
+    last_by = trip["last_checkin_user_name"] or "Старт поїздки"
+    last_time_kyiv = utc_str_to_kyiv_str(trip["last_checkin_at"])
+    start_time_kyiv = utc_str_to_kyiv_str(trip["started_at"])
+    alert_banner = ""
+    if mins >= trip["checkin_interval_min"]:
+        alert_banner = "\n🔴 <b>УВАГА: Перевищено інтервал чекіну (120 хв)! Надішліть запит екіпажу.</b>\n"
+    elif trip["pending_request_sent_at"]:
+        ping_time_kyiv = utc_str_to_kyiv_str(trip["pending_request_sent_at"])
+        alert_banner = f"\n🟡 <b>Запит надіслано ({ping_time_kyiv}). Очікується підтвердження від групи.</b>\n"
+    return (
+        f"{icon} <b>Поїздка #{trip['id']} (АКТИВНА)</b>\n"
+        f"{alert_banner}\n"
+        f"📍 Маршрут: <b>{trip['origin']} → {trip['destination']}</b>\n"
+        f"🚀 Фактичний старт: <b>{start_time_kyiv}</b>\n"
+        f"🕒 Останній чекін: <b>{mins} хв тому</b> ({last_time_kyiv}, від: {last_by})\n"
+        f"⏱ Інтервал за СОП: кожні <b>{trip['checkin_interval_min']} хв</b>\n\n"
+        f"👥 <b>Склад групи ({len(trip['crew'])}):</b>\n{crew_block}"
     )
-    controls.button(text="❌ Скасувати", callback_data="trip_cancel")
-    controls.adjust(2)
-    builder.attach(controls)
-    return builder.as_markup()
 
 
-def build_cancel_keyboard():
-    '''Кнопка скасування для текстових кроків (1 та 2).'''
-    builder = InlineKeyboardBuilder()
-    builder.button(text="❌ Скасувати", callback_data="trip_cancel")
-    return builder.as_markup()
-
-
-# --- Скасування командою /cancel ---
-
-@operator_router.message(Command("cancel"))
-async def cmd_cancel_trip(message: Message, state: FSMContext):
-    current_state = await state.get_state()
-    if current_state is None:
-        await message.answer("Немає активного процесу для скасування.")
-        return
-    await state.clear()
-    await message.answer("❌ Створення поїздки скасовано.")
-
-
-# --- КРОК 0: Старт створення поїздки ---
-@operator_router.message(Command("new_trip"))
-async def cmd_new_trip(message: Message, db_user: dict | None, state: FSMContext):
-    if not db_user or db_user["role"] not in ("OPERATOR", "ADMIN"):
-        await message.answer("⛔️ Створювати поїздки можуть лише оператори моніторингу або адміністратори.")
-        return
-    await state.clear()
-    await message.answer(
-        "🚗 <b>Створення нової поїздки</b>\n\n"
-        "Крок 1/4. Введіть <b>пункт відправлення</b> (наприклад, <i>Київ</i>):",
-        reply_markup=build_cancel_keyboard()
-    )
-    await state.set_state(NewTripFSM.waiting_for_origin)
-
-
-# --- КРОК 1: Пункт відправлення ---
-@operator_router.message(NewTripFSM.waiting_for_origin, F.text)
-async def process_origin(message: Message, state: FSMContext):
-    origin = message.text.strip()
-    await state.update_data(origin=origin)
-    await message.answer(
-        f"Відправлення: <b>{origin}</b>\n\n"
-        "Крок 2/4. Введіть <b>пункт призначення</b> (наприклад, <i>Дніпро</i>):",
-        reply_markup=build_cancel_keyboard()
-    )
-    await state.set_state(NewTripFSM.waiting_for_destination)
-
-
-# --- КРОК 2: Пункт призначення та перехід до вибору екіпажу ---
-@operator_router.message(NewTripFSM.waiting_for_destination, F.text)
-async def process_destination(message: Message, state: FSMContext):
-    destination = message.text.strip()
-    users = await get_all_users(DB_PATH)
-    if not users:
-        await message.answer("❌ У базі немає зареєстрованих користувачів. Додайте їх через /admin.")
-        await state.clear()
-        return
-    # Зберігаємо пункт призначення, повний список користувачів та порожній список обраних ID
-    await state.update_data(
-        destination=destination,
-        all_users=users,
-        selected_ids=[]
-    )
-    keyboard = build_crew_keyboard(users, selected_ids=[])
-    await message.answer(
-        f"Пункт призначення: <b>{destination}</b>\n\n"
-        "Крок 3/4. Оберіть учасників поїздки (перший обраний стане старшим групи):",
-        reply_markup=keyboard
-    )
-    await state.set_state(NewTripFSM.waiting_for_crew)
-
-
-# --- КРОК 3: Мульти-вибір учасників ---
-@operator_router.callback_query(NewTripFSM.waiting_for_crew, F.data.startswith("trip_toggle_user:"))
-async def toggle_crew_member(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    user_id = int(callback.data.split(":")[1])
-    data = await state.get_data()
-    selected_ids: list[int] = data.get("selected_ids", [])
-    users: list[dict] = data.get("all_users", [])
-    # Додаємо або прибираємо ID зі списку обраних
-    if user_id in selected_ids:
-        selected_ids.remove(user_id)
-    else:
-        selected_ids.append(user_id)
-    await state.update_data(selected_ids=selected_ids)
-    # Перемальовуємо лише клавіатуру без відправки нового повідомлення
-    keyboard = build_crew_keyboard(users, selected_ids)
-    await callback.message.edit_reply_markup(reply_markup=keyboard)
-
-
-@operator_router.callback_query(NewTripFSM.waiting_for_crew, F.data == "trip_confirm_crew")
-async def confirm_crew(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    selected_ids: list[int] = data.get("selected_ids", [])
-    if not selected_ids:
-        await callback.answer("Оберіть хоча б одного учасника поїздки!", show_alert=True)
-        return
-
-    await callback.answer()
-    # Формуємо кнопки інтервалів чекіну
-    builder = InlineKeyboardBuilder()
-    for minutes in (30, 60, 90, 120):
-        builder.button(text=f"⏱ {minutes} хв", callback_data=f"trip_interval:{minutes}")
-    builder.button(text="❌ Скасувати", callback_data="trip_cancel")
-    builder.adjust(2, 2, 1)
-    await callback.message.edit_text(
-        f"Обрано учасників: <b>{len(selected_ids)}</b>\n\n"
-        "Крок 4/4. Оберіть інтервал контролю (чекіну):",
-        reply_markup=builder.as_markup()
-    )
-    await state.set_state(NewTripFSM.waiting_for_interval)
-
-
-# --- КРОК 4: Збереження поїздки та сповіщення екіпажу ---
-@operator_router.callback_query(NewTripFSM.waiting_for_interval, F.data.startswith("trip_interval:"))
-async def save_new_trip(callback: CallbackQuery, db_user: dict, state: FSMContext, bot: Bot):
-    await callback.answer()
-    interval_min = int(callback.data.split(":")[1])
-    data = await state.get_data()
-    origin = data["origin"]
-    destination = data["destination"]
-    selected_ids: list[int] = data["selected_ids"]
-    all_users: list[dict] = data["all_users"]
-    # Записуємо поїздку в БД
-    trip_id = await create_trip(
-        db_path=DB_PATH,
-        origin=origin,
-        destination=destination,
-        participant_ids=selected_ids,
-        interval_min=interval_min,
-        operator_db_id=db_user["id"]
-    )
-    if not trip_id:
-        await callback.message.edit_text("❌ Не вдалося зберегти поїздку в базі даних.")
-        await state.clear()
-        return
-    # Відбираємо профілі обраних учасників у порядку вибору
-    users_by_id = {u["id"]: u for u in all_users}
-    crew = [users_by_id[uid] for uid in selected_ids if uid in users_by_id]
-    # Розсилаємо стартові сповіщення кожному учаснику
-    failed_notifications = []
-    crew_names = []
-    for idx, member in enumerate(crew):
-        label = f"{member['full_name']} (Старший)" if idx == 0 else member["full_name"]
-        crew_names.append(label)
+async def send_ping_to_crew(bot: Bot, trip: dict, operator_name: str) -> int:
+    '''Розсилає запит на чекін усім учасникам поїздки. Повертає кількість доставлених повідомлень.'''
+    sent_count = 0
+    trip_id = trip["id"]
+    for member in trip["crew"]:
         try:
             await bot.send_message(
                 chat_id=member["tg_id"],
                 text=(
-                    f"🚗 <b>Вас додано до активної поїздки #{trip_id}</b>\n"
-                    f"📍 Маршрут: <b>{origin} → {destination}</b>\n"
-                    f"⏱ Інтервал чекіну: кожні <b>{interval_min} хв</b>\n\n"
-                    "Початковий чекін зафіксовано. Гарної дороги!"
+                    f"📡 <b>Запит на чекін від відділу моніторингу!</b>\n\n"
+                    f"🚗 Поїздка #{trip_id}: <b>{trip['route_code']}</b>\n"
+                    f"Черговий оператор (<b>{operator_name}</b>) просить підтвердити, "
+                    "що з вами все гаразд і поїздка проходить за планом:"
                 ),
-                reply_markup=build_traveler_trip_keyboard(trip_id)
+                reply_markup=build_checkin_response_keyboard(trip_id)
             )
+            sent_count += 1
         except Exception as e:
-            # Спрацює, якщо тестовий або новий юзер ще ніколи не натискав /start у боті
-            logger.warning(f"Не вдалося надіслати сповіщення користувачу {member['tg_id']}: {e}")
-            failed_notifications.append(member["full_name"])
-    # Формуємо звіт для оператора
-    summary = (
-        f"✅ <b>Поїздку #{trip_id} активовано!</b>\n\n"
-        f"📍 Маршрут: <b>{origin} → {destination}</b>\n"
-        f"👥 Екіпаж: {', '.join(crew_names)}\n"
-        f"⏱ Інтервал чекіну: <b>{interval_min} хв</b>"
+            logger.warning(f"Не вдалося доставити пінг учаснику {member['tg_id']}: {e}")
+    return sent_count
+
+
+# =================================================
+# 1. ГОЛОВНИЙ ДАШБОРД (/trips та кнопка оновлення)
+# =================================================
+@operator_router.message(Command("trips"))
+async def cmd_trips_dashboard(message: Message, db_user: dict | None):
+    if not is_operator_or_admin(db_user):
+        await message.answer("⛔️ Ця команда доступна лише операторам моніторингу та адміністраторам.")
+        return
+    trips = await get_all_monitored_trips(DB_PATH)
+    await message.answer(
+        text=format_dashboard_text(trips),
+        reply_markup=build_operator_dashboard_keyboard(trips)
     )
-    if failed_notifications:
-        summary += (
-            "\n\n⚠️ <b>Не доставлено сповіщення:</b> "
-            f"{', '.join(failed_notifications)} "
-            "(користувач ще не запускав бота через /start або заблокував його)."
+
+
+@operator_router.callback_query(F.data == "op_dashboard_refresh")
+async def cb_refresh_dashboard(callback: CallbackQuery, db_user: dict | None):
+    if not is_operator_or_admin(db_user):
+        await callback.answer("⛔️ Немає доступу.", show_alert=True)
+        return
+    trips = await get_all_monitored_trips(DB_PATH)
+    await callback.answer("Дашборд оновлено")
+    try:
+        await callback.message.edit_text(
+            text=format_dashboard_text(trips),
+            reply_markup=build_operator_dashboard_keyboard(trips)
         )
-    await callback.message.edit_text(summary)
-    await state.clear()
+    except Exception:
+        pass
 
 
-# --- Скасування на будь-якому етапі ---
-@operator_router.callback_query(F.data == "trip_cancel")
-async def cancel_trip_creation(callback: CallbackQuery, state: FSMContext):
-    current_state = await state.get_state()
-    if current_state is None:
-        await callback.answer("Процес уже завершено або скасовано.", show_alert=True)
+# =======================================
+# 2. ПЕРЕГЛЯД КАРТКИ КОНКРЕТНОЇ ПОЇЗДКИ
+# =======================================
+@operator_router.callback_query(F.data.startswith("op_view_trip:"))
+async def cb_view_trip_details(callback: CallbackQuery, db_user: dict | None):
+    if not is_operator_or_admin(db_user):
+        await callback.answer("⛔️ Немає доступу.", show_alert=True)
+        return
+    trip_id = int(callback.data.split(":")[1])
+    trip = await get_trip_details(DB_PATH, trip_id)
+    if not trip or trip["status"] not in ("ACTIVE", "PLANNED"):
+        await callback.answer("Ця поїздка вже завершена або скасована.", show_alert=True)
+        trips = await get_all_monitored_trips(DB_PATH)
+        await callback.message.edit_text(
+            text=format_dashboard_text(trips),
+            reply_markup=build_operator_dashboard_keyboard(trips)
+        )
+        return
+    await callback.answer()
+    try:
+        await callback.message.edit_text(
+            text=format_operator_trip_details(trip),
+            reply_markup=build_operator_trip_manage_keyboard(trip)
+        )
+    except Exception:
+        pass
+
+
+# =====================================================================
+# 3. НАДСИЛАННЯ ЗАПИТУ НА ЧЕКІН (З картки дашборду та з групового чату)
+# =====================================================================
+@operator_router.callback_query(F.data.startswith("op_card_ping:"))
+async def cb_ping_from_card(callback: CallbackQuery, db_user: dict | None, bot: Bot):
+    '''Надсилання запиту на чекін зсередини детальної картки дашборду.'''
+    if not is_operator_or_admin(db_user):
+        await callback.answer("⛔️ Тільки для операторів моніторингу.", show_alert=True)
+        return
+    trip_id = int(callback.data.split(":")[1])
+    trip = await get_trip_details(DB_PATH, trip_id)
+    if not trip or trip["status"] != "ACTIVE":
+        await callback.answer("Поїздка вже не активна.", show_alert=True)
+        return
+    await mark_operator_ping_sent(DB_PATH, trip_id, db_user["id"])
+    sent_count = await send_ping_to_crew(bot, trip, db_user["full_name"])
+    await callback.answer(f"📡 Запит на чекін надіслано ({sent_count} учасн.)!", show_alert=True)
+    # Оновлюємо картку поїздки, щоб одразу з'явився жовтий статус очікування
+    updated_trip = await get_trip_details(DB_PATH, trip_id)
+    try:
+        await callback.message.edit_text(
+            text=format_operator_trip_details(updated_trip),
+            reply_markup=build_operator_trip_manage_keyboard(updated_trip)
+        )
+    except Exception:
+        pass
+
+
+@operator_router.callback_query(F.data.startswith("op_ping_trip:"))
+async def handle_operator_ping_from_alert(callback: CallbackQuery, db_user: dict | None, bot: Bot):
+    '''Надсилання запиту на чекін за кнопкою під автоматичним сповіщенням у групі моніторингу.'''
+    if not is_operator_or_admin(db_user):
+        await callback.answer("⛔️ Тільки для операторів моніторингу.", show_alert=True)
+        return
+    trip_id = int(callback.data.split(":")[1])
+    trip = await get_trip_details(DB_PATH, trip_id)
+    if not trip or trip["status"] != "ACTIVE":
+        await callback.answer("Ця поїздка вже завершена або не активна.", show_alert=True)
         await callback.message.edit_reply_markup(reply_markup=None)
         return
-    await callback.answer("Скасовано")
-    await state.clear()
-    await callback.message.edit_text("❌ Створення поїздки скасовано.")
+    await mark_operator_ping_sent(DB_PATH, trip_id, db_user["id"])
+    sent_count = await send_ping_to_crew(bot, trip, db_user["full_name"])
+    await callback.answer(f"📡 Запит надіслано ({sent_count} учасн.)")
+    now_hm = datetime.now(KYIV_TZ).strftime("%H:%M")
+    updated_text = (
+        callback.message.html_text
+        + f"\n\n⏳ <i>Запит на чекін надіслано о {now_hm} ({db_user['full_name']})</i>"
+    )
+    try:
+        await callback.message.edit_text(
+            text=updated_text,
+            reply_markup=build_operator_ping_keyboard(trip_id)
+        )
+    except Exception:
+        pass
+
+
+# =====================================================================
+# 4. РУЧНЕ КЕРУВАННЯ ПОЇЗДКОЮ ОПЕРАТОРОМ (Старт / Скасування / Закриття)
+# =====================================================================
+@operator_router.callback_query(F.data.startswith("op_force_start:"))
+async def cb_operator_force_start(callback: CallbackQuery, db_user: dict | None, bot: Bot):
+    if not is_operator_or_admin(db_user):
+        return
+    trip_id = int(callback.data.split(":")[1])
+    if not await activate_trip(DB_PATH, trip_id, actor_user_id=db_user["id"]):
+        await callback.answer("Поїздка вже активна або скасована.", show_alert=True)
+        return
+    await callback.answer("🚀 Моніторинг поїздки розпочато!")
+    trip = await get_trip_details(DB_PATH, trip_id)
+    # Розсилаємо активну картку всім учасникам
+    await notify_other_crew_members(
+        bot,
+        trip,
+        actor_user_id=-1, # -1 щоб сповіщення отримали всі члени екіпажу, включно зі старшим
+        text=(
+            f"🚀 <b>Оператор {db_user['full_name']} активував моніторинг поїздки #{trip_id}!</b>\n\n"
+            + format_trip_card(trip)
+        ),
+        reply_markup=build_traveler_trip_keyboard(trip_id)
+    )
+    await callback.message.edit_text(
+        text=format_operator_trip_details(trip),
+        reply_markup=build_operator_trip_manage_keyboard(trip)
+    )
+
+
+@operator_router.callback_query(F.data.startswith("op_force_cancel:"))
+async def cb_operator_force_cancel(callback: CallbackQuery, db_user: dict | None, bot: Bot):
+    if not is_operator_or_admin(db_user):
+        return
+    trip_id = int(callback.data.split(":")[1])
+    trip = await get_trip_details(DB_PATH, trip_id)
+    if not trip or not await cancel_planned_trip(DB_PATH, trip_id, db_user["id"]):
+        await callback.answer("Не вдалося скасувати поїздку.", show_alert=True)
+        return
+    await callback.answer("Заплановану поїздку скасовано.")
+    await notify_other_crew_members(
+        bot,
+        trip,
+        actor_user_id=-1,
+        text=f"❌ Заплановану поїздку #{trip_id} ({trip['route_code']}) скасовано оператором {db_user['full_name']}."
+    )
+    trips = await get_all_monitored_trips(DB_PATH)
+    await callback.message.edit_text(
+        text=format_dashboard_text(trips),
+        reply_markup=build_operator_dashboard_keyboard(trips)
+    )
+
+
+@operator_router.callback_query(F.data.startswith("op_force_close_ask:"))
+async def cb_operator_force_close_ask(callback: CallbackQuery, db_user: dict | None):
+    if not is_operator_or_admin(db_user):
+        return
+    trip_id = int(callback.data.split(":")[1])
+    trip = await get_trip_details(DB_PATH, trip_id)
+    if not trip or trip["status"] != "ACTIVE":
+        await callback.answer("Поїздка вже завершена.", show_alert=True)
+        return
+    await callback.answer()
+    await callback.message.edit_text(
+        f"🏁 <b>Примусове закриття поїздки #{trip_id}</b>\n\n"
+        f"Маршрут: <b>{trip['route_code']}</b>\n"
+        "Ви впевнені, що хочете закрити цю поїздку від імені відділу моніторингу?",
+        reply_markup=build_operator_close_confirm_keyboard(trip_id)
+    )
+
+
+@operator_router.callback_query(F.data.startswith("op_force_close_confirm:"))
+async def cb_operator_force_close_confirm(callback: CallbackQuery, db_user: dict | None, bot: Bot):
+    if not is_operator_or_admin(db_user):
+        return
+    trip_id = int(callback.data.split(":")[1])
+    trip = await get_trip_details(DB_PATH, trip_id)
+    if not trip or not await close_trip(DB_PATH, trip_id, db_user["id"]):
+        await callback.answer("Поїздку вже було закрито.", show_alert=True)
+        return
+    await callback.answer("🏁 Поїздку закрито.")
+    await notify_other_crew_members(
+        bot,
+        trip,
+        actor_user_id=-1,
+        text=f"🏁 <b>Поїздку #{trip_id} ({trip['route_code']}) завершено оператором {db_user['full_name']}.</b>"
+    )
+    # Повертаємо оператора на оновлений дашборд
+    trips = await get_all_monitored_trips(DB_PATH)
+    await callback.message.edit_text(
+        text=format_dashboard_text(trips),
+        reply_markup=build_operator_dashboard_keyboard(trips)
+    )

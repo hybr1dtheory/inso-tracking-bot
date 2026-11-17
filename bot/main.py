@@ -13,6 +13,7 @@ from middlewares.auth import AuthMiddleware
 from handlers.admin import admin_router
 from handlers.operator import operator_router
 from handlers.traveler import traveler_router
+from services.watchdog import watchdog_loop
 
 
 # Налаштування логування для терміналу
@@ -93,6 +94,7 @@ async def main():
     dp.include_router(admin_router)
     dp.include_router(operator_router)
     dp.include_router(traveler_router)
+    asyncio.create_task(watchdog_loop(bot))
     await dp.start_polling(bot)
 
 
