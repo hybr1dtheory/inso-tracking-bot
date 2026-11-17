@@ -12,6 +12,7 @@ from database.queries import get_user_by_tg_id, add_new_user
 from middlewares.auth import AuthMiddleware
 from handlers.admin import admin_router
 from handlers.operator import operator_router
+from handlers.traveler import traveler_router
 
 
 # Налаштування логування для терміналу
@@ -91,6 +92,7 @@ async def main():
     # РЕЄСТРАЦІЯ РОУТЕРІВ
     dp.include_router(admin_router)
     dp.include_router(operator_router)
+    dp.include_router(traveler_router)
     await dp.start_polling(bot)
 
 

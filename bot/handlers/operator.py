@@ -7,6 +7,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import DB_PATH
 from database.queries import get_all_users, create_trip
+from keyboards.inline import build_traveler_trip_keyboard
 
 
 logger = logging.getLogger(__name__)
@@ -196,7 +197,8 @@ async def save_new_trip(callback: CallbackQuery, db_user: dict, state: FSMContex
                     f"📍 Маршрут: <b>{origin} → {destination}</b>\n"
                     f"⏱ Інтервал чекіну: кожні <b>{interval_min} хв</b>\n\n"
                     "Початковий чекін зафіксовано. Гарної дороги!"
-                )
+                ),
+                reply_markup=build_traveler_trip_keyboard(trip_id)
             )
         except Exception as e:
             # Спрацює, якщо тестовий або новий юзер ще ніколи не натискав /start у боті
