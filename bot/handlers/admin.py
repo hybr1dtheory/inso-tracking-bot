@@ -1,11 +1,12 @@
-from aiogram import Router, F
-from aiogram.filters import Command, StateFilter
+from aiogram import Bot, Router, F
+from aiogram.filters import Command, or_f
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import DB_PATH
 from database.queries import get_all_users, update_user_role, add_new_user
+from keyboards.reply import BTN_ADMIN_PANEL, get_main_menu_keyboard
 
 
 admin_router = Router()
@@ -18,9 +19,10 @@ class AdminMenu(StatesGroup):
     waiting_for_new_user_name = State()
 
 
-@admin_router.message(Command("admin"))
+@admin_router.message(or_f(Command("admin"), F.text == BTN_ADMIN_PANEL))
 async def cmd_admin_panel(message: Message, db_user: dict, state: FSMContext):
     '''Головне меню адмінки (доступне лише для ADMIN)'''
+    await state.clear()
     users = await get_all_users(DB_PATH)
     builder = InlineKeyboardBuilder()
     # Кнопки для існуючих користувачів
@@ -60,19 +62,28 @@ async def select_user_for_edit(callback: CallbackQuery, state: FSMContext):
 
 
 @admin_router.callback_query(AdminMenu.waiting_for_role_selection, F.data.startswith("set_role:"))
-async def save_new_role(callback: CallbackQuery, state: FSMContext):
-    """Збереження нової ролі"""
+async def save_new_role(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    '''Збереження нової ролі та миттєве оновлення нижнього меню у користувача.'''
     new_role = callback.data.split(":")[1]
-    # Дістаємо збережений ID користувача з FSM
     user_data = await state.get_data()
     user_id = user_data.get("selected_user_id")
-    # Оновлюємо базу
     success = await update_user_role(DB_PATH, user_id, new_role)
     if success:
         await callback.message.edit_text(f"✅ Роль успішно змінено на <b>{new_role}</b>.")
+        # Знаходимо Telegram ID користувача, щоб оновити йому нижню клавіатуру
+        users = await get_all_users(DB_PATH)
+        target_user = next((u for u in users if u["id"] == user_id), None)
+        if target_user:
+            try:
+                await bot.send_message(
+                    chat_id=target_user["tg_id"],
+                    text=f"🔔 Вашу роль у системі змінено на <b>{new_role}</b>. Меню кнопок оновлено.",
+                    reply_markup=get_main_menu_keyboard(new_role)
+                )
+            except Exception:
+                pass
     else:
         await callback.message.edit_text("❌ Сталася помилка при оновленні.")
-    # Очищаємо стан FSM
     await state.clear()
 
 

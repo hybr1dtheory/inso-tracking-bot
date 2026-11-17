@@ -14,6 +14,7 @@ from handlers.admin import admin_router
 from handlers.operator import operator_router
 from handlers.traveler import traveler_router
 from services.watchdog import watchdog_loop
+from keyboards.reply import get_main_menu_keyboard
 
 
 # Налаштування логування для терміналу
@@ -30,41 +31,18 @@ dp = Dispatcher()
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     tg_id = message.from_user.id
-    username = message.from_user.username
     full_name = message.from_user.full_name
-    # Перевіряємо, чи є користувач у базі
+    username = message.from_user.username
     user = await get_user_by_tg_id(DB_PATH, tg_id)
-    if not user:  # Якщо немає — створюємо
-        logger.info(f"Новий користувач: {full_name} ({tg_id})")
+    if not user:
         user = await add_new_user(DB_PATH, tg_id, full_name, username=username)
-        if user:
-            await message.answer(
-                f"👋 Вітаю, <b>{full_name}</b>!\n\n"
-                "Вас успішно зареєстровано в системі трекінгу поїздок.\n"
-                "Ваша роль: <code>TRAVELER</code>."
-            )
-        else:
-            await message.answer("❌ Сталася помилка при реєстрації. Зверніться до адміністратора.")
-    else:
-        # Якщо вже є в базі — вітаємо в залежності від ролі
-        role = user['role']
-        if role == 'OPERATOR':
-            await message.answer(
-                f"👋 З поверненням, <b>{full_name}</b>!\n\n"
-                "Ваша роль: <code>OPERATOR</code> (Відділ моніторингу).\n"
-                "Ви можете керувати активними поїздками та створювати нові."
-            )
-        elif role == 'ADMIN':
-             await message.answer(
-                f"👋 Вітаю, <b>{full_name}</b>!\n\n"
-                "Ваша роль: <code>ADMIN</code> (Адміністратор системи)."
-            )
-        else:
-            await message.answer(
-                f"👋 З поверненням, <b>{full_name}</b>!\n\n"
-                "Ваша поточна роль: <code>TRAVELER</code>.\n"
-                "Очікуйте, поки оператор додасть вас до активного відрядження."
-            )
+    role = user["role"] if user else "TRAVELER"
+    await message.answer(
+        f"Вітаю, <b>{full_name}</b>!\n"
+        f"Ваша роль у системі: <b>{role}</b>.\n\n"
+        "Використовуйте кнопки нижнього меню для роботи з ботом:",
+        reply_markup=get_main_menu_keyboard(role)
+    )
 
 
 async def main():

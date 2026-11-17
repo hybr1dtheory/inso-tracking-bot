@@ -1,9 +1,11 @@
 import logging
 from datetime import datetime
 from aiogram import Bot, Router, F
-from aiogram.filters import Command
+from aiogram.filters import Command, or_f
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from config import DB_PATH, KYIV_TZ
+from keyboards.reply import BTN_TRIPS_DASHBOARD
 from database.queries import (
     get_all_monitored_trips,
     get_trip_details,
@@ -143,10 +145,11 @@ async def send_ping_to_crew(bot: Bot, trip: dict, operator_name: str) -> int:
 # =================================================
 # 1. ГОЛОВНИЙ ДАШБОРД (/trips та кнопка оновлення)
 # =================================================
-@operator_router.message(Command("trips"))
-async def cmd_trips_dashboard(message: Message, db_user: dict | None):
+@operator_router.message(or_f(Command("trips"), F.text == BTN_TRIPS_DASHBOARD))
+async def cmd_trips_dashboard(message: Message, db_user: dict | None, state: FSMContext):
+    await state.clear()
     if not is_operator_or_admin(db_user):
-        await message.answer("⛔️ Ця команда доступна лише операторам моніторингу та адміністраторам.")
+        await message.answer("⛔️ Ця панель доступна лише операторам моніторингу та адміністраторам.")
         return
     trips = await get_all_monitored_trips(DB_PATH)
     await message.answer(

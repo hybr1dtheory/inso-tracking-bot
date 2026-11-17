@@ -2,12 +2,13 @@ import logging
 import re
 from datetime import datetime, timedelta
 from aiogram import Bot, Router, F
-from aiogram.filters import Command
+from aiogram.filters import Command, or_f
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import DB_PATH, MONITORING_GROUP_ID, CHECKIN_INTERVAL_MIN, KYIV_TZ, UTC_TZ
+from keyboards.reply import BTN_NEW_TRIP, BTN_MY_TRIP
 from database.queries import (
     get_all_users,
     create_trip,
@@ -209,7 +210,11 @@ async def notify_other_crew_members(bot: Bot, trip: dict, actor_user_id: int, te
                 logger.warning(f"Не вдалося сповістити члена екіпажу {member['tg_id']}: {e}")
 
 
-# СТВОРЕННЯ ПОЇЗДКИ ПРАЦІВНИКОМ (/new_trip)
+# =====================================================================
+# 1. ГЛОБАЛЬНІ КОМАНДИ ТА КНОПКИ НИЖНЬОГО МЕНЮ (МАЮТЬ БУТИ НАЙПЕРШИМИ!)
+# Перебивають будь-який активний стан FSM через await state.clear()
+# =====================================================================
+
 @traveler_router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext):
     if await state.get_state() is None:
@@ -219,18 +224,7 @@ async def cmd_cancel(message: Message, state: FSMContext):
     await message.answer("❌ Дію скасовано.")
 
 
-@traveler_router.callback_query(F.data == "trip_create_cancel")
-async def cb_cancel_creation(callback: CallbackQuery, state: FSMContext):
-    if await state.get_state() is None:
-        await callback.answer("Процес вже завершено.", show_alert=True)
-        await callback.message.edit_reply_markup(reply_markup=None)
-        return
-    await callback.answer("Скасовано")
-    await state.clear()
-    await callback.message.edit_text("❌ Оформлення поїздки скасовано.")
-
-
-@traveler_router.message(Command("new_trip"))
+@traveler_router.message(or_f(Command("new_trip"), F.text == BTN_NEW_TRIP))
 async def cmd_new_trip(message: Message, db_user: dict | None, state: FSMContext):
     if not db_user:
         await message.answer("Спочатку зареєструйтесь командою /start.")
@@ -242,6 +236,43 @@ async def cmd_new_trip(message: Message, db_user: dict | None, state: FSMContext
         reply_markup=build_cancel_creation_keyboard()
     )
     await state.set_state(NewTripFSM.waiting_for_origin)
+
+
+@traveler_router.message(or_f(Command("my_trip"), F.text == BTN_MY_TRIP))
+async def cmd_my_trip(message: Message, db_user: dict | None, state: FSMContext):
+    await state.clear()
+    if not db_user:
+        await message.answer("Спочатку зареєструйтесь командою /start.")
+        return
+    trips = await get_user_active_trips(DB_PATH, db_user["id"])
+    if not trips:
+        await message.answer(
+            "🟢 У вас немає активних або запланованих поїздок.\n"
+            "Натисніть <b>«🚗 Нова поїздка»</b> в меню, щоб створити відрядження."
+        )
+        return
+    for trip in trips:
+        kb = (
+            build_planned_trip_keyboard(trip["id"])
+            if trip["status"] == "PLANNED"
+            else build_traveler_trip_keyboard(trip["id"])
+        )
+        await message.answer(text=format_trip_card(trip), reply_markup=kb)
+
+
+# =====================================================================
+# 2. КРОКИ FSM СТВОРЕННЯ ПОЇЗДКИ (Текстові + Інлайн-кнопки)
+# =====================================================================
+
+@traveler_router.callback_query(F.data == "trip_create_cancel")
+async def cb_cancel_creation(callback: CallbackQuery, state: FSMContext):
+    if await state.get_state() is None:
+        await callback.answer("Процес вже завершено.", show_alert=True)
+        await callback.message.edit_reply_markup(reply_markup=None)
+        return
+    await callback.answer("Скасовано")
+    await state.clear()
+    await callback.message.edit_text("❌ Оформлення поїздки скасовано.")
 
 
 @traveler_router.message(NewTripFSM.waiting_for_origin, F.text)
@@ -281,7 +312,6 @@ async def process_departure_time(message: Message, db_user: dict, state: FSMCont
         )
         return
     all_users = await get_all_users(DB_PATH)
-    # Виключаємо самого ініціатора зі списку супутників (він вже є старшим групи)
     other_users = [u for u in all_users if u["id"] != db_user["id"]]
     await state.update_data(
         planned_start_utc=dt_utc.strftime("%Y-%m-%d %H:%M:%S"),
@@ -333,12 +363,10 @@ async def finalize_planned_trip(callback: CallbackQuery, db_user: dict, state: F
         await callback.message.edit_text("❌ Помилка збереження поїздки в базі даних.")
         return
     trip = await get_trip_details(DB_PATH, trip_id)
-    # Показуємо картку запланованої поїздки ініціатору
     await callback.message.edit_text(
         text=format_trip_card(trip),
         reply_markup=build_planned_trip_keyboard(trip_id)
     )
-    # Розсилаємо картку іншим учасникам групи (якщо вони є)
     await notify_other_crew_members(
         bot,
         trip,
@@ -351,7 +379,10 @@ async def finalize_planned_trip(callback: CallbackQuery, db_user: dict, state: F
     )
 
 
-# ДІЇ ІЗ ЗАПЛАНОВАНОЮ ПОЇЗДКОЮ (Ручний старт або Скасування)
+# =====================================================================
+# 3. ДІЇ ІЗ ЗАПЛАНОВАНОЮ ПОЇЗДКОЮ (Ручний старт або Скасування)
+# =====================================================================
+
 @traveler_router.callback_query(F.data.startswith("trv_start_now:"))
 async def process_manual_start(callback: CallbackQuery, db_user: dict | None, bot: Bot):
     if not db_user:
@@ -371,7 +402,6 @@ async def process_manual_start(callback: CallbackQuery, db_user: dict | None, bo
         f"{m['full_name']} (Старший)" if m["is_leader"] else m["full_name"]
         for m in trip["crew"]
     )
-    # Сповіщаємо групу моніторингу з кнопкою запиту на чекін
     await notify_monitoring(
         bot,
         text=(
@@ -382,7 +412,6 @@ async def process_manual_start(callback: CallbackQuery, db_user: dict | None, bo
         ),
         reply_markup=build_operator_ping_keyboard(trip_id)
     )
-    # Сповіщаємо інших членів екіпажу
     await notify_other_crew_members(
         bot,
         trip,
@@ -417,25 +446,9 @@ async def process_cancel_planned_trip(callback: CallbackQuery, db_user: dict | N
     )
 
 
-# ПЕРЕГЛЯД ПОЇЗДОК, ЧЕКІНИ ТА ЗАКРИТТЯ (/my_trip)
-@traveler_router.message(Command("my_trip"))
-async def cmd_my_trip(message: Message, db_user: dict | None, state: FSMContext):
-    await state.clear()
-    if not db_user:
-        await message.answer("Спочатку зареєструйтесь командою /start.")
-        return
-    trips = await get_user_active_trips(DB_PATH, db_user["id"])
-    if not trips:
-        await message.answer("🟢 У вас немає активних або запланованих поїздок.\nСтворити нову: /new_trip")
-        return
-    for trip in trips:
-        kb = (
-            build_planned_trip_keyboard(trip["id"])
-            if trip["status"] == "PLANNED"
-            else build_traveler_trip_keyboard(trip["id"])
-        )
-        await message.answer(text=format_trip_card(trip), reply_markup=kb)
-
+# =====================================================================
+# 4. ЧЕКІНИ, ПРИМІТКИ ТА ЗАКРИТТЯ АКТИВНОЇ ПОЇЗДКИ
+# =====================================================================
 
 @traveler_router.callback_query(F.data.startswith("trv_refresh:"))
 async def refresh_trip_card(callback: CallbackQuery, state: FSMContext):
