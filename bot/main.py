@@ -6,9 +6,9 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.context import FSMContext
 from config import BOT_TOKEN, DB_PATH
 from database.init_db import create_tables
-from database.queries import get_user_by_tg_id, add_new_user
 from middlewares.auth import AuthMiddleware
 from handlers.admin import admin_router
 from handlers.operator import operator_router
@@ -27,16 +27,12 @@ logger = logging.getLogger(__name__)
 # Ініціалізація диспетчера (обробника подій)
 dp = Dispatcher()
 
-# Тестовий хендлер: реагує на повідомлення /start
+# хендлер реагує на повідомлення /start
 @dp.message(CommandStart())
-async def cmd_start(message: Message):
-    tg_id = message.from_user.id
-    full_name = message.from_user.full_name
-    username = message.from_user.username
-    user = await get_user_by_tg_id(DB_PATH, tg_id)
-    if not user:
-        user = await add_new_user(DB_PATH, tg_id, full_name, username=username)
-    role = user["role"] if user else "TRAVELER"
+async def cmd_start(message: Message, db_user: dict, state: FSMContext):
+    await state.clear()
+    full_name = db_user["full_name"]
+    role = db_user["role"]
     await message.answer(
         f"Вітаю, <b>{full_name}</b>!\n"
         f"Ваша роль у системі: <b>{role}</b>.\n\n"
