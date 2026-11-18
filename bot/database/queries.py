@@ -4,6 +4,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 async def get_user_by_tg_id(db_path: str, tg_id: int) -> dict | None:
     """
     Повертає профіль користувача з бази за його Telegram ID.
@@ -472,3 +473,52 @@ async def mark_trip_reminded(db_path: str, trip_id: int) -> bool:
         logger.error(f"Помилка оновлення operator_reminded_at для поїздки #{trip_id}: {e}")
         return False
 
+
+async def get_user_by_id(db_path: str, user_id: int) -> dict | None:
+    """Повертає профіль користувача за його внутрішнім id у таблиці users."""
+    query = "SELECT id, tg_id, username, full_name, role FROM users WHERE id = ?"
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, (user_id,)) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Помилка отримання користувача id={user_id}: {e}")
+        return None
+
+
+async def update_user_name(db_path: str, user_id: int, new_full_name: str) -> bool:
+    """Оновлює ПІБ користувача за його внутрішнім id."""
+    query = "UPDATE users SET full_name = ? WHERE id = ?"
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute(query, (new_full_name, user_id))
+            await db.commit()
+            return cursor.rowcount > 0
+    except Exception as e:
+        logger.error(f"Помилка оновлення імені користувача id={user_id}: {e}")
+        return False
+
+
+async def delete_user(db_path: str, user_id: int) -> bool:
+    """
+    Безпечно видаляє користувача з БД у межах однієї транзакції:
+    очищає посилання в історії поїздок/чекінів (щоб не порушити FOREIGN KEY)
+    та видаляє запис із таблиці users.
+    """
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON;")
+            # Обнуляємо посилання в історичних таблицях (зберігаючи самі записи поїздок)
+            await db.execute("UPDATE trips SET last_checkin_by = NULL WHERE last_checkin_by = ?", (user_id,))
+            await db.execute("UPDATE trips SET pending_request_by = NULL WHERE pending_request_by = ?", (user_id,))
+            await db.execute("UPDATE checkin_events SET actor_user_id = NULL WHERE actor_user_id = ?", (user_id,))
+            # Видаляємо участь у поїздках та сам профіль
+            await db.execute("DELETE FROM trip_participants WHERE user_id = ?", (user_id,))
+            cursor = await db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            await db.commit()
+            return cursor.rowcount > 0
+    except Exception as e:
+        logger.error(f"Помилка видалення користувача id={user_id}: {e}")
+        return False
