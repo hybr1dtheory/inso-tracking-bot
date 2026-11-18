@@ -24,8 +24,7 @@ from keyboards.inline import (
     build_planned_trip_keyboard,
     build_traveler_trip_keyboard,
     build_close_confirm_keyboard,
-    build_cancel_note_keyboard,
-    build_operator_ping_keyboard
+    build_cancel_note_keyboard
 )
 
 
@@ -180,18 +179,14 @@ async def notify_monitoring(bot: Bot, text: str, reply_markup=None):
     '''Надсилає повідомлення в групу моніторингу (або операторам у приват, якщо група не задана).'''
     if MONITORING_GROUP_ID:
         try:
-            await bot.send_message(
-                chat_id=int(MONITORING_GROUP_ID),
-                text=text,
-                reply_markup=reply_markup
-            )
+            await bot.send_message(chat_id=int(MONITORING_GROUP_ID), text=text)
             return
         except Exception as e:
             logger.warning(f"Не вдалося надіслати в MONITORING_GROUP_ID: {e}")
     operator_ids = await get_operators_tg_ids(DB_PATH)
     for op_tg_id in operator_ids:
         try:
-            await bot.send_message(chat_id=op_tg_id, text=text, reply_markup=reply_markup)
+            await bot.send_message(chat_id=op_tg_id, text=text)
         except Exception as e:
             logger.warning(f"Не вдалося сповістити оператора {op_tg_id}: {e}")
 
@@ -363,10 +358,12 @@ async def finalize_planned_trip(callback: CallbackQuery, db_user: dict, state: F
         await callback.message.edit_text("❌ Помилка збереження поїздки в базі даних.")
         return
     trip = await get_trip_details(DB_PATH, trip_id)
+    # Показуємо картку запланованої поїздки ініціатору
     await callback.message.edit_text(
         text=format_trip_card(trip),
         reply_markup=build_planned_trip_keyboard(trip_id)
     )
+    # Розсилаємо картку іншим учасникам групи (якщо вони є)
     await notify_other_crew_members(
         bot,
         trip,
@@ -376,6 +373,22 @@ async def finalize_planned_trip(callback: CallbackQuery, db_user: dict, state: F
             + format_trip_card(trip)
         ),
         reply_markup=build_planned_trip_keyboard(trip_id)
+    )
+    # Сповіщаємо групу моніторингу про заплановану поїздку
+    crew_names = ", ".join(
+        f"{m['full_name']} (Старший)" if m["is_leader"] else m["full_name"]
+        for m in trip["crew"]
+    )
+    dep_str = utc_str_to_kyiv_str(trip["started_at"])
+    await notify_monitoring(
+        bot,
+        text=(
+            f"📅 <b>ЗАПЛАНОВАНО НОВУ ПОЇЗДКУ #{trip_id}</b>\n"
+            f"📍 Маршрут: <b>{trip['route_code']}</b>\n"
+            f"👥 Екіпаж: {crew_names}\n"
+            f"🕒 Плановий виїзд: <b>{dep_str}</b>\n"
+            f"👤 Оформив(ла): <b>{db_user['full_name']}</b>"
+        )
     )
 
 
@@ -409,8 +422,7 @@ async def process_manual_start(callback: CallbackQuery, db_user: dict | None, bo
             f"👥 Екіпаж: {crew_names}\n"
             f"▶️ Розпочав(ла): <b>{db_user['full_name']}</b>\n"
             f"⏱ Інтервал чекіну (СОП): <b>{trip['checkin_interval_min']} хв</b>"
-        ),
-        reply_markup=build_operator_ping_keyboard(trip_id)
+        )
     )
     await notify_other_crew_members(
         bot,

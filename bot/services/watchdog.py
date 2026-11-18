@@ -8,10 +8,13 @@ from database.queries import (
     mark_trip_reminded,
     get_trip_details
 )
-from handlers.traveler import notify_monitoring, format_trip_card, utc_str_to_kyiv_str
+from handlers.traveler import (
+    notify_monitoring,
+    format_trip_card,
+    utc_str_to_kyiv_str
+)
 from keyboards.inline import (
     build_planned_trip_keyboard,
-    build_operator_ping_keyboard,
     build_checkin_response_keyboard
 )
 
@@ -93,10 +96,9 @@ async def check_overdue_checkins(bot: Bot):
                 f"📍 Маршрут: <b>{trip['route_code']}</b>\n"
                 f"👥 Екіпаж: {crew_names}\n"
                 f"🕒 Останній чекін: <b>{mins} хв тому</b> ({last_by})\n"
-                f"⏱ Норматив за СОП: <b>{trip['checkin_interval_min']} хв</b>\n\n"
-                "Натисніть кнопку нижче, щоб надіслати запит на чекін:"
-            ),
-            reply_markup=build_operator_ping_keyboard(trip_id)
+                f"⏱ Нормативний інтервал: <b>{trip['checkin_interval_min']} хв</b>\n\n"
+                "Перейдіть в бот, щоб надіслати запит на чекін"
+            )
         )
         # 2. Автоматичне нагадування подорожуючим
         for member in trip["crew"]:

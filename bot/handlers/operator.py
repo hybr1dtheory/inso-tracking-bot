@@ -22,7 +22,6 @@ from handlers.traveler import (
 from keyboards.inline import (
     get_trip_status_icon,
     build_checkin_response_keyboard,
-    build_operator_ping_keyboard,
     build_operator_dashboard_keyboard,
     build_operator_trip_manage_keyboard,
     build_operator_close_confirm_keyboard,
@@ -205,9 +204,9 @@ async def cb_view_trip_details(callback: CallbackQuery, db_user: dict | None):
         pass
 
 
-# =====================================================================
-# 3. НАДСИЛАННЯ ЗАПИТУ НА ЧЕКІН (З картки дашборду та з групового чату)
-# =====================================================================
+# ===============================
+# 3. НАДСИЛАННЯ ЗАПИТУ НА ЧЕКІН 
+# ===============================
 @operator_router.callback_query(F.data.startswith("op_card_ping:"))
 async def cb_ping_from_card(callback: CallbackQuery, db_user: dict | None, bot: Bot):
     '''Надсилання запиту на чекін зсередини детальної картки дашборду.'''
@@ -228,35 +227,6 @@ async def cb_ping_from_card(callback: CallbackQuery, db_user: dict | None, bot: 
         await callback.message.edit_text(
             text=format_operator_trip_details(updated_trip),
             reply_markup=build_operator_trip_manage_keyboard(updated_trip)
-        )
-    except Exception:
-        pass
-
-
-@operator_router.callback_query(F.data.startswith("op_ping_trip:"))
-async def handle_operator_ping_from_alert(callback: CallbackQuery, db_user: dict | None, bot: Bot):
-    '''Надсилання запиту на чекін за кнопкою під автоматичним сповіщенням у групі моніторингу.'''
-    if not is_operator_or_admin(db_user):
-        await callback.answer("⛔️ Тільки для операторів моніторингу.", show_alert=True)
-        return
-    trip_id = int(callback.data.split(":")[1])
-    trip = await get_trip_details(DB_PATH, trip_id)
-    if not trip or trip["status"] != "ACTIVE":
-        await callback.answer("Ця поїздка вже завершена або не активна.", show_alert=True)
-        await callback.message.edit_reply_markup(reply_markup=None)
-        return
-    await mark_operator_ping_sent(DB_PATH, trip_id, db_user["id"])
-    sent_count = await send_ping_to_crew(bot, trip, db_user["full_name"])
-    await callback.answer(f"📡 Запит надіслано ({sent_count} учасн.)")
-    now_hm = datetime.now(KYIV_TZ).strftime("%H:%M")
-    updated_text = (
-        callback.message.html_text
-        + f"\n\n⏳ <i>Запит на чекін надіслано о {now_hm} ({db_user['full_name']})</i>"
-    )
-    try:
-        await callback.message.edit_text(
-            text=updated_text,
-            reply_markup=build_operator_ping_keyboard(trip_id)
         )
     except Exception:
         pass

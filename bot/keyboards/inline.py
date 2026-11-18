@@ -38,16 +38,6 @@ def build_cancel_note_keyboard(trip_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def build_operator_ping_keyboard(trip_id: int) -> InlineKeyboardMarkup:
-    '''Кнопка для відділу моніторингу: надіслати запит на чекін.'''
-    builder = InlineKeyboardBuilder()
-    builder.button(
-        text="📡 Надіслати запит на чекін",
-        callback_data=f"op_ping_trip:{trip_id}"
-    )
-    return builder.as_markup()
-
-
 def build_checkin_response_keyboard(trip_id: int) -> InlineKeyboardMarkup:
     '''Кнопка швидкої відповіді мандрівника на запит оператора.'''
     builder = InlineKeyboardBuilder()
