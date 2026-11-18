@@ -5,15 +5,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 async def get_user_by_tg_id(db_path: str, tg_id: int) -> dict | None:
-    '''
+    """
     Повертає профіль користувача з бази за його Telegram ID.
     Якщо користувач не знайдений, повертає None.
-    '''
-    query = '''
+    """
+    query = """
     SELECT id, tg_id, username, full_name, phone, role, is_on_shift 
     FROM users 
     WHERE tg_id = ?
-    '''
+    """
     try:
         async with aiosqlite.connect(db_path) as db:
             # Налаштовуємо row_factory, щоб результати повертались у вигляді словника (dict-like object)
@@ -70,7 +70,7 @@ async def get_all_users(db_path: str) -> list[dict]:
 
 
 async def update_user_role(db_path: str, user_id: int, new_role: str) -> bool:
-    '''Оновлює роль користувача за його внутрішнім id в базі.'''
+    """Оновлює роль користувача за його внутрішнім id в базі."""
     query = "UPDATE users SET role = ? WHERE id = ?"
     try:
         async with aiosqlite.connect(db_path) as db:
@@ -85,11 +85,11 @@ async def update_user_role(db_path: str, user_id: int, new_role: str) -> bool:
 async def record_checkin(
     db_path: str, trip_id: int, actor_user_id: int, note: str | None = None
 ) -> str | None:
-    '''
+    """
     Фіксує чекін для поїздки, скидає прапорці очікування запиту від оператора
     та записує подію в checkin_events.
     Повертає тип події ('SELF_CHECKIN' або 'REQUESTED_CHECKIN') або None, якщо поїздка вже закрита.
-    '''
+    """
     try:
         async with aiosqlite.connect(db_path) as db:
             await db.execute("PRAGMA foreign_keys = ON;")
@@ -287,8 +287,8 @@ async def get_user_active_trips(db_path: str, user_id: int) -> list[dict]:
 
 async def activate_trip(db_path: str, trip_id: int, actor_user_id: int | None = None) -> bool:
     '''
-    Переводить поїздку зі статусу 'PLANNED' у 'ACTIVE',
-    встановлює фактичний час старту та скидає лічильник чекіну на поточний момент.
+    Переводить поїздку зі статусу 'PLANNED' у 'ACTIVE' після підтвердження виїзду,
+    фіксує фактичний час старту та скидає прапорці нагадувань для відліку 120 хв.
     '''
     try:
         async with aiosqlite.connect(db_path) as db:
@@ -299,19 +299,22 @@ async def activate_trip(db_path: str, trip_id: int, actor_user_id: int | None = 
                 SET status = 'ACTIVE',
                     started_at = CURRENT_TIMESTAMP,
                     last_checkin_at = CURRENT_TIMESTAMP,
-                    last_checkin_by = COALESCE(?, last_checkin_by)
+                    last_checkin_by = COALESCE(?, last_checkin_by),
+                    operator_reminded_at = NULL,
+                    pending_request_sent_at = NULL,
+                    pending_request_by = NULL
                 WHERE id = ? AND status = 'PLANNED'
                 ''',
                 (actor_user_id, trip_id)
             )
             if cursor.rowcount == 0:
                 return False
-            note = "Старт вручну (працівник)" if actor_user_id else "Автоматичний старт за розкладом"
+            note = "Підтверджено старт поїздки" if actor_user_id else "Старт поїздки"
             await db.execute(
-                '''
+                """
                 INSERT INTO checkin_events (trip_id, actor_user_id, event_type, note)
                 VALUES (?, ?, 'TRIP_STARTED', ?)
-                ''',
+                """,
                 (trip_id, actor_user_id, note)
             )
             await db.commit()
@@ -351,18 +354,23 @@ async def cancel_planned_trip(db_path: str, trip_id: int, actor_user_id: int) ->
 
 
 async def get_due_planned_trips(db_path: str) -> list[int]:
-    '''Повертає список ID запланованих поїздок, у яких настав час відправлення (started_at <= UTC now).'''
-    query = '''
+    """
+    Повертає ID запланованих поїздок, 
+    у яких настав час відправлення (started_at <= UTC now)
+    """
+    query = """
     SELECT id FROM trips
-    WHERE status = 'PLANNED' AND datetime(started_at) <= datetime('now')
-    '''
+    WHERE status = 'PLANNED'
+      AND datetime(started_at) <= datetime('now')
+      AND operator_reminded_at IS NULL
+    """
     try:
         async with aiosqlite.connect(db_path) as db:
             async with db.execute(query) as cursor:
                 rows = await cursor.fetchall()
                 return [r[0] for r in rows]
     except Exception as e:
-        logger.error(f"Помилка пошуку запланованих поїздок для старту: {e}")
+        logger.error(f"Помилка пошуку запланованих поїздок для нагадування: {e}")
         return []
 
 
@@ -426,3 +434,41 @@ async def get_all_monitored_trips(db_path: str) -> list[dict]:
     except Exception as e:
         logger.error(f"Помилка отримання списку поїздок для моніторингу: {e}")
         return []
+
+
+async def get_overdue_active_trips(db_path: str) -> list[int]:
+    """
+    Повертає ID активних поїздок, де з останнього чекіну минуло >= checkin_interval_min (120 хв),
+    і алерт про це прострочення ще не надсилався (operator_reminded_at IS NULL).
+    """
+    query = """
+    SELECT id FROM trips
+    WHERE status = 'ACTIVE'
+      AND CAST((julianday('now') - julianday(last_checkin_at)) * 1440 AS INTEGER) >= checkin_interval_min
+      AND operator_reminded_at IS NULL
+    """
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            async with db.execute(query) as cursor:
+                rows = await cursor.fetchall()
+                return [r[0] for r in rows]
+    except Exception as e:
+        logger.error(f"Помилка пошуку прострочених активних поїздок: {e}")
+        return []
+
+
+async def mark_trip_reminded(db_path: str, trip_id: int) -> bool:
+    """
+    Ставить мітку часу operator_reminded_at = CURRENT_TIMESTAMP,
+    щоб Watchdog не спамив повторними сповіщеннями кожні 30 секунд.
+    """
+    query = "UPDATE trips SET operator_reminded_at = CURRENT_TIMESTAMP WHERE id = ?"
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute(query, (trip_id,))
+            await db.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Помилка оновлення operator_reminded_at для поїздки #{trip_id}: {e}")
+        return False
+

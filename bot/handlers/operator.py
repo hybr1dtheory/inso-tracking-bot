@@ -74,9 +74,12 @@ def format_dashboard_text(trips: list[dict]) -> str:
         for t in planned_trips:
             dep_str = utc_str_to_kyiv_str(t["started_at"])
             leader = next((m["full_name"] for m in t["crew"] if m["is_leader"]), "Невідомо")
+            # Якщо minutes_ago > 0 для PLANNED поїздки — час виїзду вже настав, але старт ще не підтвердили
+            delay_mins = t["minutes_ago"] or 0
+            delay_note = f" — ⏳ <i>Затримка старту ({delay_mins} хв)</i>" if delay_mins > 0 else ""
             lines.append(
                 f"📅 <b>#{t['id']} {t['route_code']}</b> (ст.: {leader})\n"
-                f"   └ Виїзд: <b>{dep_str}</b>"
+                f"   └ Виїзд: <b>{dep_str}</b>{delay_note}"
             )
     lines.append("\n<i>Оберіть поїздку нижче для перегляду деталей або відправки запиту:</i>")
     return "\n".join(lines)

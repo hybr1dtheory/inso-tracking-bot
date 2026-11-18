@@ -16,6 +16,14 @@ class AuthMiddleware(BaseMiddleware):
         event: Message | CallbackQuery,
         data: Dict[str, Any]
     ) -> Any:
+        # Визначаємо об'єкт чату для тексту або натискання кнопки
+        chat = (
+            event.chat if isinstance(event, Message)
+            else (event.message.chat if event.message else None)
+        )
+        # Блокуємо будь-яку взаємодію з ботом поза особистими повідомленнями
+        if chat and chat.type != "private":
+            return
         tg_id = event.from_user.id
         user = await get_user_by_tg_id(DB_PATH, tg_id)
         # Прокидаємо об'єкт user у хендлери
