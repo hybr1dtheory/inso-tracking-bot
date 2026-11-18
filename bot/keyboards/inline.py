@@ -110,3 +110,99 @@ def build_operator_close_confirm_keyboard(trip_id: int) -> InlineKeyboardMarkup:
     builder.button(text="⬅️ Скасувати", callback_data=f"op_view_trip:{trip_id}")
     builder.adjust(1)
     return builder.as_markup()
+
+
+# =====================================================================
+# КЛАВІАТУРИ СТВОРЕННЯ ПОЇЗДКИ (Мандрівник)
+# =====================================================================
+def build_cancel_creation_keyboard() -> InlineKeyboardMarkup:
+    """Кнопка скасування під час текстових кроків оформлення поїздки."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Скасувати створення", callback_data="trip_create_cancel")
+    return builder.as_markup()
+
+
+def build_companions_keyboard(other_users: list[dict], selected_ids: list[int]) -> InlineKeyboardMarkup:
+    """Клавіатура мульти-вибору супутників при створенні поїздки."""
+    builder = InlineKeyboardBuilder()
+    if not selected_ids:
+        builder.button(
+            text="👤 Їду сам(а) — Завершити оформлення",
+            callback_data="trip_confirm_companions"
+        )
+    else:
+        builder.button(
+            text=f"✅ Підтвердити групу (супутників: {len(selected_ids)})",
+            callback_data="trip_confirm_companions"
+        )
+    for u in other_users:
+        mark = "✅" if u["id"] in selected_ids else "⬜️"
+        builder.button(
+            text=f"{mark} {u['full_name']}",
+            callback_data=f"trip_toggle_comp:{u['id']}"
+        )
+    builder.button(text="❌ Скасувати", callback_data="trip_create_cancel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+# =====================================================================
+# КЛАВІАТУРИ ПАНЕЛІ АДМІНІСТРАТОРА (/admin)
+# =====================================================================
+def build_users_list_keyboard(users: list[dict]) -> InlineKeyboardMarkup:
+    """Головний список усіх користувачів + кнопка додавання."""
+    builder = InlineKeyboardBuilder()
+    for u in users:
+        builder.button(
+            text=f"👤 {u['full_name']} ({u['role']})",
+            callback_data=f"admin_user:{u['id']}"
+        )
+    builder.button(text="➕ Додати нового користувача", callback_data="admin_add_new_user")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def build_user_actions_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    """Кнопки дій у картці конкретного користувача."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🎭 Змінити роль", callback_data=f"admin_role_menu:{user_id}")
+    builder.button(text="✏️ Змінити ПІБ", callback_data=f"admin_rename_ask:{user_id}")
+    builder.button(text="🗑 Видалити з бази", callback_data=f"admin_del_ask:{user_id}")
+    builder.button(text="⬅️ Назад до списку", callback_data="admin_back_to_list")
+    builder.adjust(2, 1, 1)
+    return builder.as_markup()
+
+
+def build_admin_role_keyboard(user_id: int, current_role: str) -> InlineKeyboardMarkup:
+    """Меню вибору нової ролі для користувача."""
+    builder = InlineKeyboardBuilder()
+    roles = [
+        ("TRAVELER", "👤 TRAVELER"),
+        ("OPERATOR", "🎧 OPERATOR"),
+        ("ADMIN", "🛡 ADMIN")
+    ]
+    for role_code, label in roles:
+        current_mark = "✅ " if current_role == role_code else ""
+        builder.button(
+            text=f"{current_mark}{label}",
+            callback_data=f"admin_set_role:{user_id}:{role_code}"
+        )
+    builder.button(text="⬅️ Назад до картки", callback_data=f"admin_user:{user_id}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def build_admin_delete_confirm_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    """Підтвердження остаточного видалення користувача."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🗑 Так, видалити остаточно", callback_data=f"admin_del_confirm:{user_id}")
+    builder.button(text="⬅️ Скасувати", callback_data=f"admin_user:{user_id}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def build_cancel_admin_input_keyboard(back_callback: str = "admin_back_to_list") -> InlineKeyboardMarkup:
+    """Кнопка скасування під час текстового вводу в адмінці."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Скасувати", callback_data=back_callback)
+    return builder.as_markup()

@@ -6,7 +6,6 @@ from aiogram.filters import Command, or_f
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import DB_PATH, MONITORING_GROUP_ID, CHECKIN_INTERVAL_MIN, KYIV_TZ, UTC_TZ
 from keyboards.reply import BTN_NEW_TRIP, BTN_MY_TRIP
 from database.queries import (
@@ -21,6 +20,8 @@ from database.queries import (
     get_operators_tg_ids
 )
 from keyboards.inline import (
+    build_cancel_creation_keyboard,
+    build_companions_keyboard,
     build_planned_trip_keyboard,
     build_traveler_trip_keyboard,
     build_close_confirm_keyboard,
@@ -109,38 +110,6 @@ def parse_kyiv_departure_time(text: str) -> tuple[datetime | None, str | None]:
         return None, None
 
 
-def build_cancel_creation_keyboard():
-    builder = InlineKeyboardBuilder()
-    builder.button(text="❌ Скасувати створення", callback_data="trip_create_cancel")
-    return builder.as_markup()
-
-
-def build_companions_keyboard(other_users: list[dict], selected_ids: list[int]):
-    '''Клавіатура вибору супутників (ініціатор вже є старшим групи за замовчуванням).'''
-    builder = InlineKeyboardBuilder()
-    # Головна швидка кнопка для індивідуальної поїздки
-    if not selected_ids:
-        builder.button(
-            text="👤 Їду сам(а) — Завершити оформлення",
-            callback_data="trip_confirm_companions"
-        )
-    else:
-        builder.button(
-            text=f"✅ Підтвердити групу (супутників: {len(selected_ids)})",
-            callback_data="trip_confirm_companions"
-        )
-
-    for u in other_users:
-        mark = "✅" if u["id"] in selected_ids else "⬜️"
-        builder.button(
-            text=f"{mark} {u['full_name']}",
-            callback_data=f"trip_toggle_comp:{u['id']}"
-        )
-    builder.button(text="❌ Скасувати", callback_data="trip_create_cancel")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
 def format_trip_card(trip: dict) -> str:
     '''Формує картку поїздки залежно від її статусу (PLANNED або ACTIVE).'''
     crew_names = [
@@ -164,7 +133,6 @@ def format_trip_card(trip: dict) -> str:
         "\n⚠️ <b>Моніторинг очікує вашого підтвердження!</b>\n"
         if trip["pending_request_sent_at"] else ""
     )
-
     return (
         f"🚗 <b>Активна поїздка #{trip['id']}</b>\n"
         f"📍 Маршрут: <b>{trip['origin']} → {trip['destination']}</b>\n"
@@ -206,10 +174,9 @@ async def notify_other_crew_members(bot: Bot, trip: dict, actor_user_id: int, te
 
 
 # =====================================================================
-# 1. ГЛОБАЛЬНІ КОМАНДИ ТА КНОПКИ НИЖНЬОГО МЕНЮ (МАЮТЬ БУТИ НАЙПЕРШИМИ!)
+# ГЛОБАЛЬНІ КОМАНДИ ТА КНОПКИ НИЖНЬОГО МЕНЮ (МАЮТЬ БУТИ НАЙПЕРШИМИ!)
 # Перебивають будь-який активний стан FSM через await state.clear()
 # =====================================================================
-
 @traveler_router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext):
     if await state.get_state() is None:
@@ -256,9 +223,8 @@ async def cmd_my_trip(message: Message, db_user: dict | None, state: FSMContext)
 
 
 # =====================================================================
-# 2. КРОКИ FSM СТВОРЕННЯ ПОЇЗДКИ (Текстові + Інлайн-кнопки)
+# КРОКИ FSM СТВОРЕННЯ ПОЇЗДКИ (Текстові + Інлайн-кнопки)
 # =====================================================================
-
 @traveler_router.callback_query(F.data == "trip_create_cancel")
 async def cb_cancel_creation(callback: CallbackQuery, state: FSMContext):
     if await state.get_state() is None:
@@ -393,9 +359,8 @@ async def finalize_planned_trip(callback: CallbackQuery, db_user: dict, state: F
 
 
 # =====================================================================
-# 3. ДІЇ ІЗ ЗАПЛАНОВАНОЮ ПОЇЗДКОЮ (Ручний старт або Скасування)
+# ДІЇ ІЗ ЗАПЛАНОВАНОЮ ПОЇЗДКОЮ (Ручний старт або Скасування)
 # =====================================================================
-
 @traveler_router.callback_query(F.data.startswith("trv_start_now:"))
 async def process_manual_start(callback: CallbackQuery, db_user: dict | None, bot: Bot):
     if not db_user:
@@ -459,9 +424,8 @@ async def process_cancel_planned_trip(callback: CallbackQuery, db_user: dict | N
 
 
 # =====================================================================
-# 4. ЧЕКІНИ, ПРИМІТКИ ТА ЗАКРИТТЯ АКТИВНОЇ ПОЇЗДКИ
+# ЧЕКІНИ, ПРИМІТКИ ТА ЗАКРИТТЯ АКТИВНОЇ ПОЇЗДКИ
 # =====================================================================
-
 @traveler_router.callback_query(F.data.startswith("trv_refresh:"))
 async def refresh_trip_card(callback: CallbackQuery, state: FSMContext):
     await state.clear()

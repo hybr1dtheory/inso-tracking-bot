@@ -3,9 +3,15 @@ from aiogram.filters import Command, or_f
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import DB_PATH, ADMIN_TG_ID
 from keyboards.reply import BTN_ADMIN_PANEL, get_main_menu_keyboard
+from keyboards.inline import (
+    build_users_list_keyboard,
+    build_user_actions_keyboard,
+    build_admin_role_keyboard,
+    build_admin_delete_confirm_keyboard,
+    build_cancel_admin_input_keyboard
+)
 from database.queries import (
     get_all_users,
     get_user_by_id,
@@ -25,20 +31,7 @@ class AdminMenu(StatesGroup):
     waiting_for_renamed_fullname = State()
 
 
-# --- Допоміжні функції побудови клавіатур та текстів адмінки ---
-def build_users_list_keyboard(users: list[dict]):
-    """Головний список усіх користувачів + кнопка додавання."""
-    builder = InlineKeyboardBuilder()
-    for u in users:
-        builder.button(
-            text=f"👤 {u['full_name']} ({u['role']})",
-            callback_data=f"admin_user:{u['id']}"
-        )
-    builder.button(text="➕ Додати нового користувача", callback_data="admin_add_new_user")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
+# --- Допоміжні функції адмінки ---
 def format_user_card_text(user: dict) -> str:
     """Текст картки вибраного користувача."""
     username_str = f"@{user['username']}" if user.get("username") else "не вказано"
@@ -50,24 +43,6 @@ def format_user_card_text(user: dict) -> str:
         f"• <b>Роль:</b> <b>{user['role']}</b>\n\n"
         "Оберіть дію:"
     )
-
-
-def build_user_actions_keyboard(user_id: int):
-    """Кнопки дій у картці конкретного користувача."""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🎭 Змінити роль", callback_data=f"admin_role_menu:{user_id}")
-    builder.button(text="✏️ Змінити ПІБ", callback_data=f"admin_rename_ask:{user_id}")
-    builder.button(text="🗑 Видалити з бази", callback_data=f"admin_del_ask:{user_id}")
-    builder.button(text="⬅️ Назад до списку", callback_data="admin_back_to_list")
-    builder.adjust(2, 1, 1)
-    return builder.as_markup()
-
-
-def build_cancel_admin_input_keyboard(back_callback: str = "admin_back_to_list"):
-    """Кнопка скасування під час текстового вводу в адмінці."""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="❌ Скасувати", callback_data=back_callback)
-    return builder.as_markup()
 
 
 # =====================================================================
@@ -127,24 +102,11 @@ async def cb_role_selection_menu(callback: CallbackQuery):
         await callback.answer("Користувача не знайдено.", show_alert=True)
         return
     await callback.answer()
-    builder = InlineKeyboardBuilder()
-    for role_code, label in [
-        ("TRAVELER", "👤 TRAVELER"),
-        ("OPERATOR", "🎧 OPERATOR"),
-        ("ADMIN", "🛡 ADMIN")
-    ]:
-        current_mark = "✅ " if user["role"] == role_code else ""
-        builder.button(
-            text=f"{current_mark}{label}",
-            callback_data=f"admin_set_role:{user_id}:{role_code}"
-        )
-    builder.button(text="⬅️ Назад до картки", callback_data=f"admin_user:{user_id}")
-    builder.adjust(1)
     await callback.message.edit_text(
         f"🎭 <b>Зміна ролі для {user['full_name']}</b>\n"
         f"Поточна роль: <b>{user['role']}</b>\n\n"
         "Оберіть нову роль:",
-        reply_markup=builder.as_markup()
+        reply_markup=build_admin_role_keyboard(user_id, user["role"])
     )
 
 
@@ -233,21 +195,16 @@ async def cb_ask_delete_user(callback: CallbackQuery, db_user: dict):
     if not target_user:
         await callback.answer("Користувача вже видалено.", show_alert=True)
         return
-    # Захист від самовидалення та видалення головного адміна з .env
     if target_user["id"] == db_user["id"] or target_user["tg_id"] == ADMIN_TG_ID:
         await callback.answer("⛔️ Ви не можете видалити власний акаунт або головного адміністратора!", show_alert=True)
         return
     await callback.answer()
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🗑 Так, видалити остаточно", callback_data=f"admin_del_confirm:{user_id}")
-    builder.button(text="⬅️ Скасувати", callback_data=f"admin_user:{user_id}")
-    builder.adjust(1)
     await callback.message.edit_text(
         f"⚠️ <b>Підтвердження видалення</b>\n\n"
         f"Ви дійсно хочете видалити користувача <b>{target_user['full_name']}</b> "
         f"(ID: <code>{target_user['tg_id']}</code>) із системи?\n\n"
         "<i>Користувач одразу втратить доступ до бота, але історія його попередніх поїздок збережеться.</i>",
-        reply_markup=builder.as_markup()
+        reply_markup=build_admin_delete_confirm_keyboard(user_id)
     )
 
 
