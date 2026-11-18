@@ -225,25 +225,34 @@ async def create_trip(
 
 
 async def get_trip_details(db_path: str, trip_id: int) -> dict | None:
-    '''Повертає деталі поїздки (PLANNED або ACTIVE) разом зі складом екіпажу.'''
-    trip_query = '''
+    """Повертає деталі поїздки (PLANNED або ACTIVE) разом зі складом екіпажу та останньою локацією."""
+    trip_query = """
     SELECT 
         t.id, t.route_code, t.origin, t.destination, t.status,
         t.checkin_interval_min, t.started_at, t.last_checkin_at,
         t.pending_request_sent_at,
         u.full_name AS last_checkin_user_name,
-        CAST((julianday('now') - julianday(t.last_checkin_at)) * 1440 AS INTEGER) AS minutes_ago
+        CAST((julianday('now') - julianday(t.last_checkin_at)) * 1440 AS INTEGER) AS minutes_ago,
+        (
+            SELECT ce.note
+            FROM checkin_events ce
+            WHERE ce.trip_id = t.id
+              AND ce.event_type IN ('SELF_CHECKIN', 'REQUESTED_CHECKIN')
+              AND ce.note IS NOT NULL
+            ORDER BY ce.id DESC
+            LIMIT 1
+        ) AS last_checkin_note
     FROM trips t
     LEFT JOIN users u ON t.last_checkin_by = u.id
     WHERE t.id = ?
-    '''
-    crew_query = '''
+    """
+    crew_query = """
     SELECT u.id, u.tg_id, u.full_name, tp.is_leader
     FROM trip_participants tp
     JOIN users u ON tp.user_id = u.id
     WHERE tp.trip_id = ?
     ORDER BY tp.is_leader DESC, u.full_name ASC
-    '''
+    """
     try:
         async with aiosqlite.connect(db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -521,4 +530,39 @@ async def delete_user(db_path: str, user_id: int) -> bool:
             return cursor.rowcount > 0
     except Exception as e:
         logger.error(f"Помилка видалення користувача id={user_id}: {e}")
+        return False
+
+
+async def record_help_request(
+    db_path: str, trip_id: int, actor_user_id: int, note: str | None = None
+) -> bool:
+    """
+    Записує подію 'HELP_REQUESTED' в аудит-лог checkin_events
+    та оновлює час останнього зв'язку з групою.
+    """
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON;")
+            cursor = await db.execute(
+                """
+                UPDATE trips
+                SET last_checkin_at = CURRENT_TIMESTAMP,
+                    last_checkin_by = ?
+                WHERE id = ? AND status = 'ACTIVE'
+                """,
+                (actor_user_id, trip_id)
+            )
+            if cursor.rowcount == 0:
+                return False
+            await db.execute(
+                """
+                INSERT INTO checkin_events (trip_id, actor_user_id, event_type, note)
+                VALUES (?, ?, 'HELP_REQUESTED', ?)
+                """,
+                (trip_id, actor_user_id, note or "Без коментаря")
+            )
+            await db.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Помилка запису HELP_REQUESTED для поїздки #{trip_id}: {e}")
         return False

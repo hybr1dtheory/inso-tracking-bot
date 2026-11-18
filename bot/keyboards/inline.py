@@ -12,10 +12,10 @@ def build_planned_trip_keyboard(trip_id: int) -> InlineKeyboardMarkup:
 
 
 def build_traveler_trip_keyboard(trip_id: int) -> InlineKeyboardMarkup:
-    '''Основна клавіатура керування активною поїздкою.'''
+    """Основна клавіатура керування активною поїздкою."""
     builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Чекін: Все гаразд", callback_data=f"trv_checkin:{trip_id}")
-    builder.button(text="💬 Чекін з приміткою", callback_data=f"trv_note:{trip_id}")
+    builder.button(text="📍 Зробити чекін (вказати локацію)", callback_data=f"trv_note:{trip_id}")
+    builder.button(text="🆘 Потрібна допомога", callback_data=f"trv_help_ask:{trip_id}")
     builder.button(text="🔄 Оновити статус", callback_data=f"trv_refresh:{trip_id}")
     builder.button(text="🏁 Прибули (Закрити поїздку)", callback_data=f"trv_close_ask:{trip_id}")
     builder.adjust(1, 2, 1)
@@ -39,15 +39,30 @@ def build_cancel_note_keyboard(trip_id: int) -> InlineKeyboardMarkup:
 
 
 def build_checkin_response_keyboard(trip_id: int) -> InlineKeyboardMarkup:
-    '''Кнопка швидкої відповіді мандрівника на запит оператора.'''
+    """Клавіатура у повідомленні запиту на чекін від оператора або Watchdog."""
     builder = InlineKeyboardBuilder()
     builder.button(
-        text="✅ Підтверджую: Все гаразд (У дорозі)",
-        callback_data=f"trv_checkin:{trip_id}"
+        text="📍 Зробити чекін (вказати локацію)",
+        callback_data=f"trv_note:{trip_id}"
     )
     builder.button(
-        text="💬 Відповісти з приміткою",
-        callback_data=f"trv_note:{trip_id}"
+        text="🆘 Потрібна допомога",
+        callback_data=f"trv_help_ask:{trip_id}"
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def build_help_comment_keyboard(trip_id: int) -> InlineKeyboardMarkup:
+    """Клавіатура під час запиту про допомогу"""
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🚨 Надіслати БЕЗ коментаря",
+        callback_data=f"trv_help_send_empty:{trip_id}"
+    )
+    builder.button(
+        text="❌ Скасувати",
+        callback_data=f"trv_refresh:{trip_id}"
     )
     builder.adjust(1)
     return builder.as_markup()

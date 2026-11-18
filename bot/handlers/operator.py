@@ -98,7 +98,7 @@ def format_operator_trip_details(trip: dict) -> str:
             f"{icon} <b>Поїздка #{trip['id']} (ЗАПЛАНОВАНА)</b>\n\n"
             f"📍 Маршрут: <b>{trip['origin']} → {trip['destination']}</b>\n"
             f"🕒 Запланований виїзд: <b>{dep_str}</b>\n"
-            f"⏱ Інтервал чекіну за СОП: <b>{trip['checkin_interval_min']} хв</b>\n\n"
+            f"⏱ Інтервал чекіну: <b>{trip['checkin_interval_min']} хв</b>\n\n"
             f"👥 <b>Склад групи ({len(trip['crew'])}):</b>\n{crew_block}"
         )
     mins = max(0, trip["minutes_ago"] or 0)
@@ -111,13 +111,18 @@ def format_operator_trip_details(trip: dict) -> str:
     elif trip["pending_request_sent_at"]:
         ping_time_kyiv = utc_str_to_kyiv_str(trip["pending_request_sent_at"])
         alert_banner = f"\n🟡 <b>Запит надіслано ({ping_time_kyiv}). Очікується підтвердження від групи.</b>\n"
+    location_str = (
+        f"📌 Останній коментар: <b>{trip['last_checkin_note']}</b>\n"
+        if trip.get("last_checkin_note") else ""
+    )
     return (
         f"{icon} <b>Поїздка #{trip['id']} (АКТИВНА)</b>\n"
         f"{alert_banner}\n"
         f"📍 Маршрут: <b>{trip['origin']} → {trip['destination']}</b>\n"
         f"🚀 Фактичний старт: <b>{start_time_kyiv}</b>\n"
         f"🕒 Останній чекін: <b>{mins} хв тому</b> ({last_time_kyiv}, від: {last_by})\n"
-        f"⏱ Інтервал за СОП: кожні <b>{trip['checkin_interval_min']} хв</b>\n\n"
+        f"{location_str}"
+        f"⏱ Інтервал чекіну: кожні <b>{trip['checkin_interval_min']} хв</b>\n\n"
         f"👥 <b>Склад групи ({len(trip['crew'])}):</b>\n{crew_block}"
     )
 
