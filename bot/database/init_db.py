@@ -1,5 +1,6 @@
 import aiosqlite
 import logging
+from config import ADMIN_TG_ID, ADMIN_FULL_NAME
 
 
 logger = logging.getLogger(__name__)
@@ -21,16 +22,15 @@ async def create_tables(db_path: str):
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     '''
-
     CREATE_TRIPS_TABLE = '''
     CREATE TABLE IF NOT EXISTS trips (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         route_code TEXT NOT NULL,
         origin TEXT NOT NULL,
         destination TEXT NOT NULL,
-        status TEXT DEFAULT 'ACTIVE', -- 'PLANNED', 'ACTIVE', 'COMPLETED', 'CANCELLED'
+        status TEXT DEFAULT 'PLANNED', -- 'PLANNED', 'ACTIVE', 'COMPLETED', 'CANCELLED'
         
-        checkin_interval_min INTEGER DEFAULT 60,
+        checkin_interval_min INTEGER DEFAULT 120,
         started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         ended_at TIMESTAMP,
         
@@ -42,7 +42,6 @@ async def create_tables(db_path: str):
         pending_request_by INTEGER REFERENCES users(id)
     );
     '''
-
     CREATE_TRIP_PARTICIPANTS_TABLE = '''
     CREATE TABLE IF NOT EXISTS trip_participants (
         trip_id INTEGER REFERENCES trips(id) ON DELETE CASCADE,
@@ -51,7 +50,6 @@ async def create_tables(db_path: str):
         PRIMARY KEY (trip_id, user_id)
     );
     '''
-
     CREATE_CHECKIN_EVENTS_TABLE = '''
     CREATE TABLE IF NOT EXISTS checkin_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,21 +66,29 @@ async def create_tables(db_path: str):
         async with aiosqlite.connect(db_path) as db:
             # Вмикаємо підтримку зовнішніх ключів (Foreign Keys)
             await db.execute("PRAGMA foreign_keys = ON;")
-            
             # Виконуємо запити
             await db.execute(CREATE_USERS_TABLE)
             await db.execute(CREATE_TRIPS_TABLE)
             await db.execute(CREATE_TRIP_PARTICIPANTS_TABLE)
             await db.execute(CREATE_CHECKIN_EVENTS_TABLE)
-            
             # Створюємо індекси для прискорення пошуку прострочених поїздок ворКером
             await db.execute("CREATE INDEX IF NOT EXISTS idx_trips_active ON trips(status);")
-            
+            # Додаємо першого адміна
+            if ADMIN_TG_ID:
+                await db.execute(
+                    """
+                    INSERT INTO users (tg_id, full_name, role)
+                    VALUES (?, ?, 'ADMIN')
+                    ON CONFLICT(tg_id) DO UPDATE SET role = 'ADMIN';
+                    """,
+                    (ADMIN_TG_ID, ADMIN_FULL_NAME)
+                )
+                logger.info(f"🛡 Головного адміністратора (tg_id={ADMIN_TG_ID}) синхронізовано.")
+            else:
+                logger.warning("⚠️ ADMIN_TG_ID не вказано в .env! Першого адміна не створено.")
             # Зберігаємо зміни
             await db.commit()
-            
             logger.info("✅ База даних SQLite успішно ініціалізована.")
-            
     except Exception as e:
         logger.error(f"❌ Помилка при створенні бази даних: {e}")
         raise
