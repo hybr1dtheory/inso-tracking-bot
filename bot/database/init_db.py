@@ -83,12 +83,12 @@ async def create_tables(db_path: str):
                     """,
                     (ADMIN_TG_ID, ADMIN_FULL_NAME)
                 )
-                logger.info(f"🛡 Головного адміністратора (tg_id={ADMIN_TG_ID}) синхронізовано.")
+                logger.info(f"🛡 The main administrator (tg_id={ADMIN_TG_ID}) has been synchronized.")
             else:
-                logger.warning("⚠️ ADMIN_TG_ID не вказано в .env! Першого адміна не створено.")
+                logger.warning("⚠️ ADMIN_TG_ID is not specified in .env! The first admin has not been created.")
             # Зберігаємо зміни
             await db.commit()
-            logger.info("✅ База даних SQLite успішно ініціалізована.")
+            logger.info("✅ The SQLite database has been successfully initialized.")
     except Exception as e:
-        logger.error(f"❌ Помилка при створенні бази даних: {e}")
+        logger.error(f"❌ Error while creating the database: {e}")
         raise

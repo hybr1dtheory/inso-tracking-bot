@@ -28,18 +28,18 @@ class AuthMiddleware(BaseMiddleware):
         user = await get_user_by_tg_id(DB_PATH, tg_id)
         # ФІЛЬТР: Якщо користувача немає в БД — блокуємо доступ
         if not user:
-            logger.warning(f"Спроба доступу незареєстрованого користувача: tg_id={tg_id}")
+            logger.warning(f"Attempt by an unregistered user to access : tg_id={tg_id}")
             if isinstance(event, Message):
                 await event.answer(
-                    "⛔️ <b>Доступ заборонено.</b>\n"
-                    "Ваш акаунт не зареєстровано в системі моніторингу.\n\n"
-                    f"Ваш Telegram ID: <code>{tg_id}</code>\n"
-                    "<i>Скопіюйте цей ID та надішліть адміністратору для надання доступу.</i>",
+                    "⛔️ <b>Access is prohibited.</b>\n"
+                    "Your account is not registered in the monitoring system.\n\n"
+                    f"Your Telegram ID: <code>{tg_id}</code>\n"
+                    "<i>Copy this ID and send it to the administrator to grant access.</i>",
                     reply_markup=ReplyKeyboardRemove()
                 )
             elif isinstance(event, CallbackQuery):
                 await event.answer(
-                    "⛔️ Доступ заборонено. Ви не зареєстровані в системі.",
+                    "⛔️ Access is denied. You are not registered in the system.",
                     show_alert=True
                 )
             return
@@ -49,6 +49,6 @@ class AuthMiddleware(BaseMiddleware):
         if isinstance(event, Message) and event.text:
             if event.text.startswith("/admin") or event.text == BTN_ADMIN_PANEL:
                 if user["role"] != "ADMIN":
-                    await event.answer("⛔️ У вас немає доступу до панелі адміністратора.")
+                    await event.answer("⛔️ You do not have access to the admin panel.")
                     return
         return await handler(event, data)

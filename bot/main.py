@@ -24,7 +24,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Ініціалізація диспетчера (обробника подій)
+# Ініціалізація диспетчера
 dp = Dispatcher()
 
 # хендлер реагує на повідомлення /start
@@ -34,9 +34,9 @@ async def cmd_start(message: Message, db_user: dict, state: FSMContext):
     full_name = db_user["full_name"]
     role = db_user["role"]
     await message.answer(
-        f"Вітаю, <b>{full_name}</b>!\n"
-        f"Ваша роль у системі: <b>{role}</b>.\n\n"
-        "Використовуйте кнопки нижнього меню для роботи з ботом:",
+        f"Hello, <b>{full_name}</b>!\n"
+        f"Your role in the system: <b>{role}</b>.\n\n"
+        "Use the buttons in the bottom menu to interact with the bot:",
         reply_markup=get_main_menu_keyboard(role)
     )
 
@@ -44,19 +44,19 @@ async def cmd_start(message: Message, db_user: dict, state: FSMContext):
 async def main():
     # Перевірка наявності токену
     if not BOT_TOKEN:
-        logger.error("❌ BOT_TOKEN не знайдено! Перевірте файл .env")
+        logger.error("❌ BOT_TOKEN not found! Check the .env file")
         return
     # Створення папки data, якщо вона не існує
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     # Ініціалізація бази даних SQLite
-    logger.info("Ініціалізація бази даних...")
+    logger.info("Initializing the database...")
     await create_tables(DB_PATH)
     # Ініціалізація бота з підтримкою HTML-розмітки за замовчуванням
     bot = Bot(
         token=BOT_TOKEN, 
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
-    logger.info("🔄 Бот починає поллінг (очікування повідомлень)...")
+    logger.info("🔄 The bot is starting polling (waiting for messages)...")
     
     # Запускаємо бота
     # Видаляємо вебхуки, щоб не було конфліктів при локальному поллінгу
@@ -76,4 +76,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("🛑 Роботу бота завершено вручну (Ctrl+C).")
+        logger.info("🛑 The bot's task was manually finished (Ctrl+C)")

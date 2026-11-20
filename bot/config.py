@@ -18,4 +18,4 @@ UTC_TZ = ZoneInfo("UTC")
 # Налаштування першого адміністратора з .env
 _raw_admin_id = os.getenv("ADMIN_TG_ID", "").strip()
 ADMIN_TG_ID: int | None = int(_raw_admin_id) if _raw_admin_id.isdigit() else None
-ADMIN_FULL_NAME: str = os.getenv("ADMIN_FULL_NAME", "Адміністратор").strip()
+ADMIN_FULL_NAME: str = os.getenv("ADMIN_FULL_NAME", "Administrator").strip()

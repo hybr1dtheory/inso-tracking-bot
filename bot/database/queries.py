@@ -25,7 +25,7 @@ async def get_user_by_tg_id(db_path: str, tg_id: int) -> dict | None:
                     return dict(user) # Перетворюємо aiosqlite.Row на звичайний dict
                 return None
     except Exception as e:
-        logger.error(f"Помилка при пошуку користувача {tg_id}: {e}")
+        logger.error(f"Error while searching for a user {tg_id}: {e}")
         return None
 
 
@@ -48,10 +48,10 @@ async def add_new_user(
             await db.commit()
             return await get_user_by_tg_id(db_path, tg_id)        
     except aiosqlite.IntegrityError:
-        logger.warning(f"Спроба додати користувача {tg_id}, який вже існує.")
+        logger.warning(f"Attempt to add user {tg_id}, who already exists.")
         return None
     except Exception as e:
-        logger.error(f"Помилка при додаванні користувача {tg_id}: {e}")
+        logger.error(f"Error adding a user {tg_id}: {e}")
         return None
 
 
@@ -66,7 +66,7 @@ async def get_all_users(db_path: str) -> list[dict]:
                 users = await cursor.fetchall()
                 return [dict(user) for user in users]
     except Exception as e:
-        logger.error(f"Помилка отримання списку користувачів: {e}")
+        logger.error(f"Error getting user list: {e}")
         return []
 
 
@@ -79,7 +79,7 @@ async def update_user_role(db_path: str, user_id: int, new_role: str) -> bool:
             await db.commit()
             return True
     except Exception as e:
-        logger.error(f"Помилка оновлення ролі користувача {user_id}: {e}")
+        logger.error(f"User Role Update Error {user_id}: {e}")
         return False
 
 
@@ -126,7 +126,7 @@ async def record_checkin(
             await db.commit()
             return event_type
     except Exception as e:
-        logger.error(f"Помилка запису чекіну для поїздки #{trip_id}: {e}")
+        logger.error(f"Error recording a check-in for a trip #{trip_id}: {e}")
         return None
 
 
@@ -159,7 +159,7 @@ async def close_trip(db_path: str, trip_id: int, actor_user_id: int) -> bool:
             await db.commit()
             return True
     except Exception as e:
-        logger.error(f"Помилка закриття поїздки #{trip_id}: {e}")
+        logger.error(f"Error closing the trip #{trip_id}: {e}")
         return False
 
 
@@ -172,7 +172,7 @@ async def get_operators_tg_ids(db_path: str) -> list[int]:
                 rows = await cursor.fetchall()
                 return [r[0] for r in rows]
     except Exception as e:
-        logger.error(f"Помилка отримання списку операторів: {e}")
+        logger.error(f"Error getting list of operators: {e}")
         return []
 
 
@@ -215,12 +215,12 @@ async def create_trip(
                 INSERT INTO checkin_events (trip_id, actor_user_id, event_type, note)
                 VALUES (?, ?, 'TRIP_PLANNED', ?)
                 """,
-                (trip_id, creator_user_id, f"Запланований виїзд (UTC): {planned_start_utc}")
+                (trip_id, creator_user_id, f"Scheduled Departure (UTC): {planned_start_utc}")
             )
             await db.commit()
             return trip_id
     except Exception as e:
-        logger.error(f"Помилка при створенні поїздки {route_code}: {e}")
+        logger.error(f"Error creating a trip {route_code}: {e}")
         return None
 
 
@@ -266,7 +266,7 @@ async def get_trip_details(db_path: str, trip_id: int) -> dict | None:
                 trip["crew"] = [dict(r) for r in crew_rows]
             return trip
     except Exception as e:
-        logger.error(f"Помилка отримання деталей поїздки #{trip_id}: {e}")
+        logger.error(f"Error getting trip details #{trip_id}: {e}")
         return None
 
 
@@ -291,7 +291,7 @@ async def get_user_active_trips(db_path: str, user_id: int) -> list[dict]:
                 trips.append(details)
         return trips
     except Exception as e:
-        logger.error(f"Помилка отримання поїздок користувача {user_id}: {e}")
+        logger.error(f"Error getting user trips {user_id}: {e}")
         return []
 
 
@@ -319,7 +319,7 @@ async def activate_trip(db_path: str, trip_id: int, actor_user_id: int | None = 
             )
             if cursor.rowcount == 0:
                 return False
-            note = "Підтверджено старт поїздки" if actor_user_id else "Старт поїздки"
+            note = "The start of the trip has been confirmed" if actor_user_id else "Start of the trip"
             await db.execute(
                 """
                 INSERT INTO checkin_events (trip_id, actor_user_id, event_type, note)
@@ -330,7 +330,7 @@ async def activate_trip(db_path: str, trip_id: int, actor_user_id: int | None = 
             await db.commit()
             return True
     except Exception as e:
-        logger.error(f"Помилка активації поїздки #{trip_id}: {e}")
+        logger.error(f"Trip Activation Error #{trip_id}: {e}")
         return False
 
 
@@ -359,7 +359,7 @@ async def cancel_planned_trip(db_path: str, trip_id: int, actor_user_id: int) ->
             await db.commit()
             return True
     except Exception as e:
-        logger.error(f"Помилка скасування поїздки #{trip_id}: {e}")
+        logger.error(f"Trip Cancellation Error #{trip_id}: {e}")
         return False
 
 
@@ -380,7 +380,7 @@ async def get_due_planned_trips(db_path: str) -> list[int]:
                 rows = await cursor.fetchall()
                 return [r[0] for r in rows]
     except Exception as e:
-        logger.error(f"Помилка пошуку запланованих поїздок для нагадування: {e}")
+        logger.error(f"Error searching for scheduled trips for reminders: {e}")
         return []
 
 
@@ -410,7 +410,7 @@ async def mark_operator_ping_sent(db_path: str, trip_id: int, operator_user_id: 
             await db.commit()
             return True
     except Exception as e:
-        logger.error(f"Помилка фіксації запиту оператора для поїздки #{trip_id}: {e}")
+        logger.error(f"Error recording the operator's request for a trip#{trip_id}: {e}")
         return False
 
 
@@ -442,7 +442,7 @@ async def get_all_monitored_trips(db_path: str) -> list[dict]:
                 trips.append(details)
         return trips
     except Exception as e:
-        logger.error(f"Помилка отримання списку поїздок для моніторингу: {e}")
+        logger.error(f"Error getting the list of trips for monitoring: {e}")
         return []
 
 
@@ -463,7 +463,7 @@ async def get_overdue_active_trips(db_path: str) -> list[int]:
                 rows = await cursor.fetchall()
                 return [r[0] for r in rows]
     except Exception as e:
-        logger.error(f"Помилка пошуку прострочених активних поїздок: {e}")
+        logger.error(f"Error searching for overdue active trips: {e}")
         return []
 
 
@@ -479,7 +479,7 @@ async def mark_trip_reminded(db_path: str, trip_id: int) -> bool:
             await db.commit()
             return True
     except Exception as e:
-        logger.error(f"Помилка оновлення operator_reminded_at для поїздки #{trip_id}: {e}")
+        logger.error(f"Error updating operator_reminded_at for a trip#{trip_id}: {e}")
         return False
 
 
@@ -493,7 +493,7 @@ async def get_user_by_id(db_path: str, user_id: int) -> dict | None:
                 row = await cursor.fetchone()
                 return dict(row) if row else None
     except Exception as e:
-        logger.error(f"Помилка отримання користувача id={user_id}: {e}")
+        logger.error(f"Error getting user id={user_id}: {e}")
         return None
 
 
@@ -506,7 +506,7 @@ async def update_user_name(db_path: str, user_id: int, new_full_name: str) -> bo
             await db.commit()
             return cursor.rowcount > 0
     except Exception as e:
-        logger.error(f"Помилка оновлення імені користувача id={user_id}: {e}")
+        logger.error(f"User Name Update Error id={user_id}: {e}")
         return False
 
 
@@ -529,7 +529,7 @@ async def delete_user(db_path: str, user_id: int) -> bool:
             await db.commit()
             return cursor.rowcount > 0
     except Exception as e:
-        logger.error(f"Помилка видалення користувача id={user_id}: {e}")
+        logger.error(f"User Deletion Error id={user_id}: {e}")
         return False
 
 
@@ -559,10 +559,10 @@ async def record_help_request(
                 INSERT INTO checkin_events (trip_id, actor_user_id, event_type, note)
                 VALUES (?, ?, 'HELP_REQUESTED', ?)
                 """,
-                (trip_id, actor_user_id, note or "Без коментаря")
+                (trip_id, actor_user_id, note or "No comment")
             )
             await db.commit()
             return True
     except Exception as e:
-        logger.error(f"Помилка запису HELP_REQUESTED для поїздки #{trip_id}: {e}")
+        logger.error(f"Error recording HELP_REQUESTED for the trip #{trip_id}: {e}")
         return False
