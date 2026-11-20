@@ -437,11 +437,28 @@ async def process_cancel_planned_trip(callback: CallbackQuery, db_user: dict | N
     await callback.message.edit_text(
         f"❌ <b>Заплановану поїздку #{trip_id} ({trip['route_code']}) скасовано.</b>"
     )
+    # Сповіщаємо інших учасників екіпажу
     await notify_other_crew_members(
         bot,
         trip,
         actor_user_id=db_user["id"],
         text=f"❌ Заплановану поїздку #{trip_id} ({trip['route_code']}) скасовано користувачем {db_user['full_name']}."
+    )
+    # Сповіщаємо групу моніторингу (щоб закрити запис про запланований виїзд у стрічці)
+    crew_names = ", ".join(
+        f"{m['full_name']} (Старший)" if m["is_leader"] else m["full_name"]
+        for m in trip["crew"]
+    )
+    dep_str = utc_str_to_kyiv_str(trip["started_at"])
+    await notify_monitoring(
+        bot,
+        text=(
+            f"❌ <b>ЗАПЛАНОВАНО ПОЇЗДКУ СКАСОВАНО #{trip_id}</b>\n"
+            f"📍 Маршрут: <b>{trip['route_code']}</b>\n"
+            f"👥 Екіпаж: {crew_names}\n"
+            f"🕒 Плановий виїзд був: <b>{dep_str}</b>\n"
+            f"👤 Скасував(ла): <b>{db_user['full_name']}</b>"
+        )
     )
 
 

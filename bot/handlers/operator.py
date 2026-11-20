@@ -17,7 +17,8 @@ from database.queries import (
 from handlers.traveler import (
     utc_str_to_kyiv_str,
     format_trip_card,
-    notify_other_crew_members
+    notify_other_crew_members,
+    notify_monitoring
 )
 from keyboards.inline import (
     get_trip_status_icon,
@@ -282,6 +283,14 @@ async def cb_operator_force_cancel(callback: CallbackQuery, db_user: dict | None
         trip,
         actor_user_id=-1,
         text=f"❌ Заплановану поїздку #{trip_id} ({trip['route_code']}) скасовано оператором {db_user['full_name']}."
+    )
+    await notify_monitoring(
+        bot,
+        text=(
+            f"❌ <b>ЗАПЛАНОВАНО ПОЇЗДКУ СКАСОВАНО #{trip_id}</b>\n"
+            f"📍 Маршрут: <b>{trip['route_code']}</b>\n"
+            f"👤 Скасував оператор: <b>{db_user['full_name']}</b>"
+        )
     )
     trips = await get_all_monitored_trips(DB_PATH)
     await callback.message.edit_text(
