@@ -285,15 +285,29 @@ async def process_departure_time(message: Message, db_user: dict, state: FSMCont
         planned_start_utc=dt_utc.strftime("%Y-%m-%d %H:%M:%S"),
         kyiv_departure_label=kyiv_label,
         other_users=other_users,
-        selected_companion_ids=[]
+        selected_companion_ids=[],
+        comp_page=0
     )
     await message.answer(
         f"🕒 Час виїзду: <b>{kyiv_label}</b>\n\n"
         f"Крок 4/4. Ви (<b>{db_user['full_name']}</b>) автоматично призначені старшим поїздки.\n"
         "Якщо їдете самі — натисніть верхню кнопку. Якщо групою — відмітьте супутників:",
-        reply_markup=build_companions_keyboard(other_users, [])
+        reply_markup=build_companions_keyboard(other_users, [], page=0)
     )
     await state.set_state(NewTripFSM.waiting_for_companions)
+
+
+@traveler_router.callback_query(NewTripFSM.waiting_for_companions, F.data.startswith("trip_comp_page:"))
+async def paginate_companions(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    page = int(callback.data.split(":")[1])
+    data = await state.get_data()
+    selected_ids: list[int] = data.get("selected_companion_ids", [])
+    other_users: list[dict] = data.get("other_users", [])
+    await state.update_data(comp_page=page)
+    await callback.message.edit_reply_markup(
+        reply_markup=build_companions_keyboard(other_users, selected_ids, page=page)
+    )
 
 
 @traveler_router.callback_query(NewTripFSM.waiting_for_companions, F.data.startswith("trip_toggle_comp:"))
@@ -303,13 +317,14 @@ async def toggle_companion(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     selected_ids: list[int] = data.get("selected_companion_ids", [])
     other_users: list[dict] = data.get("other_users", [])
+    current_page: int = data.get("comp_page", 0)
     if comp_id in selected_ids:
         selected_ids.remove(comp_id)
     else:
         selected_ids.append(comp_id)
     await state.update_data(selected_companion_ids=selected_ids)
     await callback.message.edit_reply_markup(
-        reply_markup=build_companions_keyboard(other_users, selected_ids)
+        reply_markup=build_companions_keyboard(other_users, selected_ids, page=current_page)
     )
 
 

@@ -51,18 +51,19 @@ def format_user_card_text(user: dict) -> str:
 @admin_router.message(or_f(Command("admin"), F.text == BTN_ADMIN_PANEL))
 async def cmd_admin_panel(message: Message, db_user: dict, state: FSMContext):
     await state.clear()
+    await state.update_data(admin_page=0)
     users = await get_all_users(DB_PATH)
     text = (
         "🛠 <b>Панель адміністратора</b>\n\n"
         f"Зареєстровано користувачів: <b>{len(users)}</b>.\n"
         "Оберіть співробітника для редагування або додайте нового:"
     )
-    await message.answer(text, reply_markup=build_users_list_keyboard(users))
+    await message.answer(text, reply_markup=build_users_list_keyboard(users, page=0))
 
 
 @admin_router.callback_query(F.data == "admin_back_to_list")
 async def cb_back_to_users_list(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
+    page = await _reset_state_keep_page(state)
     await callback.answer()
     users = await get_all_users(DB_PATH)
     text = (
@@ -70,7 +71,33 @@ async def cb_back_to_users_list(callback: CallbackQuery, state: FSMContext):
         f"Зареєстровано користувачів: <b>{len(users)}</b>.\n"
         "Оберіть співробітника для редагування або додайте нового:"
     )
-    await callback.message.edit_text(text, reply_markup=build_users_list_keyboard(users))
+    await callback.message.edit_text(text, reply_markup=build_users_list_keyboard(users, page=page))
+
+
+async def _reset_state_keep_page(state: FSMContext) -> int:
+    """Скидає активний крок FSM, але зберігає номер поточної сторінки списку."""
+    data = await state.get_data()
+    page = data.get("admin_page", 0)
+    await state.clear()
+    await state.update_data(admin_page=page)
+    return page
+
+
+@admin_router.callback_query(F.data == "noop")
+async def cb_noop(callback: CallbackQuery):
+    """Закриває індикатор завантаження при натисканні на лічильник сторінок чи неактивну стрілку."""
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data.startswith("admin_users_page:"))
+async def cb_paginate_users_list(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    page = int(callback.data.split(":")[1])
+    await state.update_data(admin_page=page)
+    users = await get_all_users(DB_PATH)
+    await callback.message.edit_reply_markup(
+        reply_markup=build_users_list_keyboard(users, page=page)
+    )
 
 
 # =====================================================================
@@ -78,7 +105,7 @@ async def cb_back_to_users_list(callback: CallbackQuery, state: FSMContext):
 # =====================================================================
 @admin_router.callback_query(F.data.startswith("admin_user:"))
 async def cb_open_user_card(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
+    await _reset_state_keep_page(state)
     user_id = int(callback.data.split(":")[1])
     user = await get_user_by_id(DB_PATH, user_id)
     if not user:
@@ -233,11 +260,12 @@ async def cb_confirm_delete_user(callback: CallbackQuery, db_user: dict, state: 
     except Exception:
         pass
     # Повертаємо адміна до оновленого списку користувачів
+    page = await _reset_state_keep_page(state)
     users = await get_all_users(DB_PATH)
     await callback.message.edit_text(
         f"✅ Користувача <b>{target_user['full_name']}</b> видалено з бази.\n\n"
         f"🛠 <b>Панель адміністратора</b> (усього: {len(users)}):",
-        reply_markup=build_users_list_keyboard(users)
+        reply_markup=build_users_list_keyboard(users, page=page)
     )
 
 

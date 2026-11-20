@@ -1,5 +1,37 @@
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+
+USERS_PER_PAGE = 8
+
+def _paginate_slice(items: list, page: int, per_page: int = USERS_PER_PAGE) -> tuple[list, int, int]:
+    """
+    Повертає: (зріз_елементів_сторінки, безпечний_індекс_сторінки, всього_сторінок).
+    Автоматично коригує page, якщо кількість елементів зменшилася (напр. після видалення).
+    """
+    total_pages = max(1, (len(items) + per_page - 1) // per_page)
+    safe_page = max(0, min(page, total_pages - 1))
+    start = safe_page * per_page
+    return items[start:start + per_page], safe_page, total_pages
+
+
+def _build_pagination_row(prefix: str, page: int, total_pages: int) -> list[InlineKeyboardButton]:
+    """Формує фіксований ряд навігації з 3 кнопок."""
+    prev_btn = (
+        InlineKeyboardButton(text="⬅️", callback_data=f"{prefix}:{page - 1}")
+        if page > 0
+        else InlineKeyboardButton(text="·", callback_data="noop")
+    )
+    counter_btn = InlineKeyboardButton(
+        text=f"📄 {page + 1}/{total_pages}",
+        callback_data="noop"
+    )
+    next_btn = (
+        InlineKeyboardButton(text="➡️", callback_data=f"{prefix}:{page + 1}")
+        if page < total_pages - 1
+        else InlineKeyboardButton(text="·", callback_data="noop")
+    )
+    return [prev_btn, counter_btn, next_btn]
 
 
 def build_planned_trip_keyboard(trip_id: int) -> InlineKeyboardMarkup:
@@ -137,43 +169,58 @@ def build_cancel_creation_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def build_companions_keyboard(other_users: list[dict], selected_ids: list[int]) -> InlineKeyboardMarkup:
-    """Клавіатура мульти-вибору супутників при створенні поїздки."""
+def build_companions_keyboard(
+    other_users: list[dict], selected_ids: list[int], page: int = 0
+) -> InlineKeyboardMarkup:
+    """Клавіатура мульти-вибору супутників із пагінацією при створенні поїздки."""
     builder = InlineKeyboardBuilder()
+    # Верхня кнопка підтвердження (відображає загальну кількість обраних по всіх сторінках)
     if not selected_ids:
-        builder.button(
-            text="👤 Їду сам(а) — Завершити оформлення",
-            callback_data="trip_confirm_companions"
-        )
+        confirm_text = "👤 Їду сам(а) — Завершити оформлення"
     else:
-        builder.button(
-            text=f"✅ Підтвердити групу (супутників: {len(selected_ids)})",
-            callback_data="trip_confirm_companions"
-        )
-    for u in other_users:
+        confirm_text = f"✅ Підтвердити групу (супутників: {len(selected_ids)})"
+    builder.row(
+        InlineKeyboardButton(text=confirm_text, callback_data="trip_confirm_companions")
+    )
+    # Список користувачів на поточній сторінці
+    page_users, safe_page, total_pages = _paginate_slice(other_users, page)
+    for u in page_users:
         mark = "✅" if u["id"] in selected_ids else "⬜️"
-        builder.button(
-            text=f"{mark} {u['full_name']}",
-            callback_data=f"trip_toggle_comp:{u['id']}"
+        builder.row(
+            InlineKeyboardButton(
+                text=f"{mark} {u['full_name']}",
+                callback_data=f"trip_toggle_comp:{u['id']}"
+            )
         )
-    builder.button(text="❌ Скасувати", callback_data="trip_create_cancel")
-    builder.adjust(1)
+    # Ряд пагінації (з'являється автоматично, коли людей більше ніж USERS_PER_PAGE)
+    if total_pages > 1:
+        builder.row(*_build_pagination_row("trip_comp_page", safe_page, total_pages))
+    # Нижня кнопка скасування
+    builder.row(
+        InlineKeyboardButton(text="❌ Скасувати", callback_data="trip_create_cancel")
+    )
     return builder.as_markup()
 
 
 # =====================================================================
 # КЛАВІАТУРИ ПАНЕЛІ АДМІНІСТРАТОРА (/admin)
 # =====================================================================
-def build_users_list_keyboard(users: list[dict]) -> InlineKeyboardMarkup:
-    """Головний список усіх користувачів + кнопка додавання."""
+def build_users_list_keyboard(users: list[dict], page: int = 0) -> InlineKeyboardMarkup:
+    """Головний список усіх користувачів в адмін-панелі із пагінацією."""
     builder = InlineKeyboardBuilder()
-    for u in users:
-        builder.button(
-            text=f"👤 {u['full_name']} ({u['role']})",
-            callback_data=f"admin_user:{u['id']}"
+    page_users, safe_page, total_pages = _paginate_slice(users, page)
+    for u in page_users:
+        builder.row(
+            InlineKeyboardButton(
+                text=f"👤 {u['full_name']} ({u['role']})",
+                callback_data=f"admin_user:{u['id']}"
+            )
         )
-    builder.button(text="➕ Додати нового користувача", callback_data="admin_add_new_user")
-    builder.adjust(1)
+    if total_pages > 1:
+        builder.row(*_build_pagination_row("admin_users_page", safe_page, total_pages))
+    builder.row(
+        InlineKeyboardButton(text="➕ Додати нового користувача", callback_data="admin_add_new_user")
+    )
     return builder.as_markup()
 
 

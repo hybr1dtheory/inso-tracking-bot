@@ -57,7 +57,7 @@ async def add_new_user(
 
 async def get_all_users(db_path: str) -> list[dict]:
     '''Повертає список усіх зареєстрованих користувачів.'''
-    query = "SELECT id, tg_id, full_name, role FROM users ORDER BY id ASC"
+    query = "SELECT id, tg_id, full_name, role FROM users ORDER BY full_name ASC"
     
     try:
         async with aiosqlite.connect(db_path) as db:
