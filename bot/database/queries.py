@@ -6,67 +6,55 @@ logger = logging.getLogger(__name__)
 
 
 async def get_user_by_tg_id(db_path: str, tg_id: int) -> dict | None:
-    """
-    Повертає профіль користувача з бази за його Telegram ID.
-    Якщо користувач не знайдений, повертає None.
-    """
-    query = """
-    SELECT id, tg_id, username, full_name, phone, role, is_on_shift 
-    FROM users 
-    WHERE tg_id = ?
-    """
+    """Повертає профіль користувача за його Telegram ID."""
+    query = "SELECT id, tg_id, full_name, team, role FROM users WHERE tg_id = ?"
     try:
         async with aiosqlite.connect(db_path) as db:
-            # Налаштовуємо row_factory, щоб результати повертались у вигляді словника (dict-like object)
-            db.row_factory = aiosqlite.Row 
+            db.row_factory = aiosqlite.Row
             async with db.execute(query, (tg_id,)) as cursor:
-                user = await cursor.fetchone()
-                if user:
-                    return dict(user) # Перетворюємо aiosqlite.Row на звичайний dict
-                return None
+                row = await cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
-        logger.error(f"Error while searching for a user {tg_id}: {e}")
+        logger.error(f"Помилка отримання користувача tg_id={tg_id}: {e}")
         return None
 
 
 async def add_new_user(
-    db_path: str, tg_id: int, full_name: str, 
-    username: str | None = None, role: str = 'TRAVELER'
+    db_path: str, tg_id: int, full_name: str,
+    team: str | None = None, role: str = "TRAVELER"
 ) -> dict | None:
-    '''
-    Універсальна функція для додавання користувача в БД.
-    Повертає профіль створеного користувача, або None у разі помилки/дублікату.
-    '''
-    query = '''
-    INSERT INTO users (tg_id, username, full_name, role) 
+    """Додає нового користувача в таблицю users та повертає його профіль."""
+    query = """
+    INSERT INTO users (tg_id, full_name, team, role)
     VALUES (?, ?, ?, ?)
-    '''
+    """
     try:
         async with aiosqlite.connect(db_path) as db:
-            db.row_factory = aiosqlite.Row
-            await db.execute(query, (tg_id, username, full_name, role))
+            cursor = await db.execute(query, (tg_id, full_name, team, role))
             await db.commit()
-            return await get_user_by_tg_id(db_path, tg_id)        
-    except aiosqlite.IntegrityError:
-        logger.warning(f"Attempt to add user {tg_id}, who already exists.")
-        return None
+            return {
+                "id": cursor.lastrowid,
+                "tg_id": tg_id,
+                "full_name": full_name,
+                "team": team,
+                "role": role
+            }
     except Exception as e:
-        logger.error(f"Error adding a user {tg_id}: {e}")
+        logger.error(f"Помилка додавання користувача tg_id={tg_id}: {e}")
         return None
 
 
 async def get_all_users(db_path: str) -> list[dict]:
-    '''Повертає список усіх зареєстрованих користувачів.'''
-    query = "SELECT id, tg_id, full_name, role FROM users ORDER BY full_name ASC"
-    
+    """Повертає всіх зареєстрованих користувачів, відсортованих за алфавітом."""
+    query = "SELECT id, tg_id, full_name, team, role FROM users ORDER BY full_name ASC"
     try:
         async with aiosqlite.connect(db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(query) as cursor:
-                users = await cursor.fetchall()
-                return [dict(user) for user in users]
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
     except Exception as e:
-        logger.error(f"Error getting user list: {e}")
+        logger.error(f"Помилка отримання списку користувачів: {e}")
         return []
 
 
@@ -80,6 +68,19 @@ async def update_user_role(db_path: str, user_id: int, new_role: str) -> bool:
             return True
     except Exception as e:
         logger.error(f"User Role Update Error {user_id}: {e}")
+        return False
+
+
+async def update_user_team(db_path: str, user_id: int, new_team: str) -> bool:
+    """Оновлює відділ (team) користувача за його внутрішнім id."""
+    query = "UPDATE users SET team = ? WHERE id = ?"
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute(query, (new_team, user_id))
+            await db.commit()
+            return cursor.rowcount > 0
+    except Exception as e:
+        logger.error(f"Помилка оновлення відділу користувача id={user_id}: {e}")
         return False
 
 
@@ -247,7 +248,7 @@ async def get_trip_details(db_path: str, trip_id: int) -> dict | None:
     WHERE t.id = ?
     """
     crew_query = """
-    SELECT u.id, u.tg_id, u.full_name, tp.is_leader
+    SELECT u.id, u.tg_id, u.full_name, u.team, tp.is_leader
     FROM trip_participants tp
     JOIN users u ON tp.user_id = u.id
     WHERE tp.trip_id = ?
@@ -485,7 +486,7 @@ async def mark_trip_reminded(db_path: str, trip_id: int) -> bool:
 
 async def get_user_by_id(db_path: str, user_id: int) -> dict | None:
     """Повертає профіль користувача за його внутрішнім id у таблиці users."""
-    query = "SELECT id, tg_id, username, full_name, role FROM users WHERE id = ?"
+    query = "SELECT id, tg_id, full_name, team, role FROM users WHERE id = ?"
     try:
         async with aiosqlite.connect(db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -493,7 +494,7 @@ async def get_user_by_id(db_path: str, user_id: int) -> dict | None:
                 row = await cursor.fetchone()
                 return dict(row) if row else None
     except Exception as e:
-        logger.error(f"Error getting user id={user_id}: {e}")
+        logger.error(f"Помилка отримання користувача id={user_id}: {e}")
         return None
 
 

@@ -14,8 +14,8 @@ async def create_tables(db_path: str):
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         tg_id INTEGER UNIQUE NOT NULL,
-        username TEXT,
         full_name TEXT NOT NULL,
+        team TEXT,
         phone TEXT,
         role TEXT DEFAULT 'TRAVELER', -- 'TRAVELER', 'OPERATOR', 'ADMIN'
         is_on_shift INTEGER DEFAULT 0, -- 0 = False, 1 = True
@@ -68,10 +68,19 @@ async def create_tables(db_path: str):
             await db.execute("PRAGMA foreign_keys = ON;")
             # Виконуємо запити
             await db.execute(CREATE_USERS_TABLE)
+            # Авто-міграція існуючої таблиці users (додаємо team, видаляємо username)
+            async with db.execute("PRAGMA table_info(users);") as cursor:
+                existing_cols = {row[1] for row in await cursor.fetchall()}
+            if "team" not in existing_cols:
+                await db.execute("ALTER TABLE users ADD COLUMN team TEXT;")
+                logger.info("🔄 Міграція БД: додано колонку 'team' у таблицю users.")
+            if "username" in existing_cols:
+                await db.execute("ALTER TABLE users DROP COLUMN username;")
+                logger.info("🔄 Міграція БД: видалено колонку 'username' із таблиці users.")
             await db.execute(CREATE_TRIPS_TABLE)
             await db.execute(CREATE_TRIP_PARTICIPANTS_TABLE)
             await db.execute(CREATE_CHECKIN_EVENTS_TABLE)
-            # Створюємо індекси для прискорення пошуку прострочених поїздок ворКером
+            # Створюємо індекси для прискорення пошуку прострочених поїздок воркером
             await db.execute("CREATE INDEX IF NOT EXISTS idx_trips_active ON trips(status);")
             # Додаємо першого адміна
             if ADMIN_TG_ID:

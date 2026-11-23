@@ -18,7 +18,8 @@ from database.queries import (
     update_user_role,
     update_user_name,
     delete_user,
-    add_new_user
+    add_new_user,
+    update_user_team
 )
 
 
@@ -28,18 +29,20 @@ admin_router = Router()
 class AdminMenu(StatesGroup):
     waiting_for_new_user_tgid = State()
     waiting_for_new_user_name = State()
+    waiting_for_new_user_team = State()
     waiting_for_renamed_fullname = State()
+    waiting_for_edited_team = State()
 
 
 # --- Допоміжні функції адмінки ---
 def format_user_card_text(user: dict) -> str:
     """Текст картки вибраного користувача."""
-    username_str = f"@{user['username']}" if user.get("username") else "not specified"
+    team_str = user.get("team") or "Not specified"
     return (
-        f"👤 <b>User information</b>\n\n"
+        f"👤 <b>User Card</b>\n\n"
         f"• <b>Full Name:</b> {user['full_name']}\n"
+        f"• <b>Team:</b> {team_str}\n"
         f"• <b>Telegram ID:</b> <code>{user['tg_id']}</code>\n"
-        f"• <b>Username:</b> {username_str}\n"
         f"• <b>Role:</b> <b>{user['role']}</b>\n\n"
         "Select an action:"
     )
@@ -213,6 +216,49 @@ async def process_renamed_fullname(message: Message, state: FSMContext):
 
 
 # =====================================================================
+# ЗМІНА ВІДДІЛУ КОРИСТУВАЧА
+# =====================================================================
+@admin_router.callback_query(F.data.startswith("admin_team_ask:"))
+async def cb_ask_new_team(callback: CallbackQuery, state: FSMContext):
+    user_id = int(callback.data.split(":")[1])
+    user = await get_user_by_id(DB_PATH, user_id)
+    if not user:
+        await callback.answer("User not found.", show_alert=True)
+        return
+    await callback.answer()
+    await state.update_data(edit_team_user_id=user_id)
+    await state.set_state(AdminMenu.waiting_for_edited_team)
+    current_team = user.get("team") or "Not specified"
+    await callback.message.edit_text(
+        f"🏢 <b>Edit Team</b>\n"
+        f"User: <b>{user['full_name']}</b>\n"
+        f"Current team: <b>{current_team}</b>\n\n"
+        "Enter the new <b>Team / Department</b>:",
+        reply_markup=build_cancel_admin_input_keyboard(f"admin_user:{user_id}")
+    )
+
+
+@admin_router.message(AdminMenu.waiting_for_edited_team, F.text)
+async def process_edited_team(message: Message, state: FSMContext):
+    new_team = message.text.strip()
+    data = await state.get_data()
+    user_id = data.get("edit_team_user_id")
+    await state.clear()
+    if len(new_team) < 2:
+        await message.answer("❌ Team name is too short. Try again via /admin.")
+        return
+    success = await update_user_team(DB_PATH, user_id, new_team)
+    user = await get_user_by_id(DB_PATH, user_id)
+    if success and user:
+        await message.answer(
+            f"✅ Team successfully updated to <b>{new_team}</b>!\n\n" + format_user_card_text(user),
+            reply_markup=build_user_actions_keyboard(user_id)
+        )
+    else:
+        await message.answer("❌ Failed to update user team.")
+
+
+# =====================================================================
 # 5. ВИДАЛЕННЯ КОРИСТУВАЧА З БАЗИ (З підтвердженням)
 # =====================================================================
 @admin_router.callback_query(F.data.startswith("admin_del_ask:"))
@@ -304,28 +350,47 @@ async def process_invalid_tgid(message: Message):
 
 
 @admin_router.message(AdminMenu.waiting_for_new_user_name, F.text)
-async def process_new_user_name(message: Message, state: FSMContext, bot: Bot):
+async def process_new_user_name(message: Message, state: FSMContext):
     full_name = message.text.strip()
+    await state.update_data(new_user_name=full_name)
+    await message.answer(
+        f"Full Name: <b>{full_name}</b> accepted.\n"
+        "Now enter the employee's <b>Team / Department</b>:",
+        reply_markup=build_cancel_admin_input_keyboard("admin_back_to_list")
+    )
+    await state.set_state(AdminMenu.waiting_for_new_user_team)
+
+
+@admin_router.message(AdminMenu.waiting_for_new_user_team, F.text)
+async def process_new_user_team(message: Message, state: FSMContext, bot: Bot):
+    team = message.text.strip()
     user_data = await state.get_data()
     tg_id = user_data.get("new_user_tgid")
+    full_name = user_data.get("new_user_name")
     await state.clear()
-    added_user = await add_new_user(DB_PATH, tg_id=tg_id, full_name=full_name, role="TRAVELER")
+    added_user = await add_new_user(
+        DB_PATH,
+        tg_id=tg_id,
+        full_name=full_name,
+        team=team,
+        role="TRAVELER"
+    )
     if added_user:
         try:
             await bot.send_message(
                 chat_id=tg_id,
                 text=(
                     f"✅ <b>Your account has been activated by an administrator!</b>\n"
-                    f"Name: <b>{full_name}</b>\n\n"
+                    f"Name: <b>{full_name}</b>\n"
+                    f"Team: <b>{team}</b>\n\n"
                     "You can now use the menu buttons below:"
                 ),
                 reply_markup=get_main_menu_keyboard("TRAVELER")
             )
         except Exception:
             pass
-        # Одразу відкриваємо картку щойно створеного користувача (щоб за потреби змінити роль)
         await message.answer(
-            f"✅ The user <b>{full_name}</b> was successfully added!\n\n"
+            f"✅ User <b>{full_name}</b> ({team}) successfully created!\n\n"
             + format_user_card_text(added_user),
             reply_markup=build_user_actions_keyboard(added_user["id"])
         )

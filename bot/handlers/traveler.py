@@ -113,18 +113,29 @@ def parse_kyiv_departure_time(text: str) -> tuple[datetime | None, str | None]:
         return None, None
 
 
+def format_crew_list(crew: list[dict]) -> str:
+    """Форматує список учасників поїздки із зазначенням відділу та старшого групи."""
+    formatted = []
+    for m in crew:
+        tags = []
+        if m.get("team"):
+            tags.append(m["team"])
+        if m.get("is_leader"):
+            tags.append("Team Leader")
+        tag_str = f" ({', '.join(tags)})" if tags else ""
+        formatted.append(f"{m['full_name']}{tag_str}")
+    return "\n".join(formatted)
+
+
 def format_trip_card(trip: dict) -> str:
     """Формує картку поїздки залежно від її статусу (PLANNED або ACTIVE)."""
-    crew_names = [
-        f"{m['full_name']} (Team Leader)" if m["is_leader"] else m["full_name"]
-        for m in trip["crew"]
-    ]
+    crew_names = format_crew_list(trip["crew"])
     if trip["status"] == "PLANNED":
         dep_str = utc_str_to_kyiv_str(trip["started_at"])
         return (
             f"📅 <b>Planned trip #{trip['id']}</b>\n"
             f"📍 Route: <b>{trip['origin']} → {trip['destination']}</b>\n"
-            f"👥 Crew: {', '.join(crew_names)}\n"
+            f"👥 Crew: \n{crew_names}\n"
             f"🕒 Departure: <b>{dep_str}</b>\n"
             f"⏱ Check-in interval: <b>{trip['checkin_interval_min']} min</b>\n\n"
             "<i>Monitoring will begin after you confirm departure using the button below.</i>"
@@ -142,7 +153,7 @@ def format_trip_card(trip: dict) -> str:
     return (
         f"🚗 <b>Active trip #{trip['id']}</b>\n"
         f"📍 Route: <b>{trip['origin']} → {trip['destination']}</b>\n"
-        f"👥 Crew: {', '.join(crew_names)}\n"
+        f"👥 Crew: \n{crew_names}\n"
         f"⏱ Check-in interval: every <b>{trip['checkin_interval_min']} min</b>\n"
         f"🕒 Last check-in: <b>{minutes_ago} min ago</b> ({last_by})"
         f"{location_line}"
@@ -362,18 +373,15 @@ async def finalize_planned_trip(callback: CallbackQuery, db_user: dict, state: F
         ),
         reply_markup=build_planned_trip_keyboard(trip_id)
     )
-    # Сповіщаємо групу моніторингу про заплановану поїздку
-    crew_names = ", ".join(
-        f"{m['full_name']} (Team Leader)" if m["is_leader"] else m["full_name"]
-        for m in trip["crew"]
-    )
+    crew_names = format_crew_list(trip["crew"])
     dep_str = utc_str_to_kyiv_str(trip["started_at"])
+    # Сповіщаємо групу моніторингу про заплановану поїздку
     await notify_monitoring(
         bot,
         text=(
             f"📅 <b>NEW TRIP PLANNED #{trip_id}</b>\n"
             f"📍 Route: <b>{trip['route_code']}</b>\n"
-            f"👥 Crew: {crew_names}\n"
+            f"👥 Crew: \n{crew_names}\n"
             f"🕒 Planned departure: <b>{dep_str}</b>\n"
             f"👤 Created by: <b>{db_user['full_name']}</b>"
         )
@@ -398,15 +406,12 @@ async def process_manual_start(callback: CallbackQuery, db_user: dict | None, bo
         text=format_trip_card(trip) + "\n\n🚀 <i>Monitoring started!</i>",
         reply_markup=build_traveler_trip_keyboard(trip_id)
     )
-    crew_names = ", ".join(
-        f"{m['full_name']} (Team Leader)" if m["is_leader"] else m["full_name"]
-        for m in trip["crew"]
-    )
+    crew_names = format_crew_list(trip["crew"])
     await notify_monitoring(
         bot,
         text=(
             f"🚀 <b>TRIP STARTED #{trip_id}</b> ({trip['route_code']})\n"
-            f"👥 Crew: {crew_names}\n"
+            f"👥 Crew: \n{crew_names}\n"
             f"▶️ Started by: <b>{db_user['full_name']}</b>\n"
             f"⏱ Check-in interval (SOP): <b>{trip['checkin_interval_min']} min</b>"
         )
@@ -445,17 +450,14 @@ async def process_cancel_planned_trip(callback: CallbackQuery, db_user: dict | N
         text=f"❌ Planned trip #{trip_id} ({trip['route_code']}) was cancelled by {db_user['full_name']}."
     )
     # Сповіщаємо групу моніторингу (щоб закрити запис про запланований виїзд у стрічці)
-    crew_names = ", ".join(
-        f"{m['full_name']} (Team Leader)" if m["is_leader"] else m["full_name"]
-        for m in trip["crew"]
-    )
+    crew_names = format_crew_list(trip["crew"])
     dep_str = utc_str_to_kyiv_str(trip["started_at"])
     await notify_monitoring(
         bot,
         text=(
             f"❌ <b>PLANNED TRIP CANCELLED #{trip_id}</b>\n"
             f"📍 Route: <b>{trip['route_code']}</b>\n"
-            f"👥 Crew: {crew_names}\n"
+            f"👥 Crew: \n{crew_names}\n"
             f"🕒 Planned departure was: <b>{dep_str}</b>\n"
             f"👤 Cancelled by: <b>{db_user['full_name']}</b>"
         )
@@ -550,10 +552,7 @@ async def execute_help_alert(
     if not recorded:
         return None
     trip = await get_trip_details(DB_PATH, trip_id)
-    crew_names = ", ".join(
-        f"{m['full_name']} (Team Leader)" if m["is_leader"] else m["full_name"]
-        for m in trip["crew"]
-    )
+    crew_names = format_crew_list(trip["crew"])
     comment_block = f"💬 <b>Details:</b> <i>{comment}</i>" if comment else "💬 <b>Details:</b> <i>No comment (urgent alert)</i>"
     # Термінове сповіщення в групу моніторингу
     await notify_monitoring(
@@ -561,7 +560,7 @@ async def execute_help_alert(
         f"🚨🆘 <b>NEED HELP — Trip #{trip_id}</b>\n"
         f"📍 Route: <b>{trip['route_code']}</b>\n"
         f"👤 Alert from: <b>{db_user['full_name']}</b>\n"
-        f"👥 Full crew: {crew_names}\n"
+        f"👥 Full crew: \n{crew_names}\n"
         f"{comment_block}\n\n"
         "❗️ <b>Contact the crew immediately!</b>"
     )

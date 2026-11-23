@@ -210,9 +210,10 @@ def build_users_list_keyboard(users: list[dict], page: int = 0) -> InlineKeyboar
     builder = InlineKeyboardBuilder()
     page_users, safe_page, total_pages = _paginate_slice(users, page)
     for u in page_users:
+        team_str = f" [{u['team']}]" if u.get("team") else ""
         builder.row(
             InlineKeyboardButton(
-                text=f"👤 {u['full_name']} ({u['role']})",
+                text=f"👤 {u['full_name']}{team_str} ({u['role']})",
                 callback_data=f"admin_user:{u['id']}"
             )
         )
@@ -229,9 +230,10 @@ def build_user_actions_keyboard(user_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🎭 Change role", callback_data=f"admin_role_menu:{user_id}")
     builder.button(text="✏️ Edit full name", callback_data=f"admin_rename_ask:{user_id}")
+    builder.button(text="🏢 Edit team", callback_data=f"admin_team_ask:{user_id}")
     builder.button(text="🗑 Delete from database", callback_data=f"admin_del_ask:{user_id}")
     builder.button(text="⬅️ Back to list", callback_data="admin_back_to_list")
-    builder.adjust(2, 1, 1)
+    builder.adjust(2, 2, 1)
     return builder.as_markup()
 
 

@@ -58,7 +58,13 @@ def format_dashboard_text(trips: list[dict]) -> str:
             icon = get_trip_status_icon(t)
             mins = max(0, t["minutes_ago"] or 0)
             crew_count = len(t["crew"])
-            leader = next((m["full_name"] for m in t["crew"] if m["is_leader"]), "Unknown")
+            leader = next(
+                (
+                    f"{m['full_name']} ({m['team']})" if m.get("team") else m["full_name"] 
+                    for m in t["crew"] if m["is_leader"]
+                ),
+                "Unknown"
+            )
             status_note = ""
             if mins >= t["checkin_interval_min"]:
                 status_note = " — ⚠️ <b>CHECK-IN TIME HAS EXPIRED!</b>"
@@ -73,7 +79,13 @@ def format_dashboard_text(trips: list[dict]) -> str:
         lines.append("📅 <b>PLANNED TRIPS:</b>")
         for t in planned_trips:
             dep_str = utc_str_to_kyiv_str(t["started_at"])
-            leader = next((m["full_name"] for m in t["crew"] if m["is_leader"]), "Unknown")
+            leader = next(
+                (
+                    f"{m['full_name']} ({m['team']})" if m.get("team") else m["full_name"] 
+                    for m in t["crew"] if m["is_leader"]
+                ),
+                "Unknown"
+            )
             # Якщо minutes_ago > 0 для PLANNED поїздки — час виїзду вже настав, але старт ще не підтвердили
             delay_mins = t["minutes_ago"] or 0
             delay_note = f" — ⏳ <i>Delay ({delay_mins} min)</i>" if delay_mins > 0 else ""
@@ -90,8 +102,9 @@ def format_operator_trip_details(trip: dict) -> str:
     icon = get_trip_status_icon(trip)
     crew_lines = []
     for m in trip["crew"]:
-        role_tag = " 👑 <i>(Leader)</i>" if m["is_leader"] else ""
-        crew_lines.append(f"• {m['full_name']}{role_tag} [ID: <code>{m['tg_id']}</code>]")
+        team_tag = f" | 🏢 {m['team']}" if m.get("team") else ""
+        role_tag = " 👑 <i>(Team Leader)</i>" if m["is_leader"] else ""
+        crew_lines.append(f"• {m['full_name']}{team_tag}{role_tag} [ID: <code>{m['tg_id']}</code>]")
     crew_block = "\n".join(crew_lines)
     if trip["status"] == "PLANNED":
         dep_str = utc_str_to_kyiv_str(trip["started_at"])

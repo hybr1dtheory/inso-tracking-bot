@@ -11,7 +11,8 @@ from database.queries import (
 from handlers.traveler import (
     notify_monitoring,
     format_trip_card,
-    utc_str_to_kyiv_str
+    utc_str_to_kyiv_str,
+    format_crew_list
 )
 from keyboards.inline import (
     build_planned_trip_keyboard,
@@ -35,10 +36,7 @@ async def check_planned_departures(bot: Bot):
         # Ставимо мітку, що сповіщення про час виїзду вже надіслано
         await mark_trip_reminded(DB_PATH, trip_id)
 
-        crew_names = ", ".join(
-            f"{m['full_name']} (Team Leader)" if m["is_leader"] else m["full_name"]
-            for m in trip["crew"]
-        )
+        crew_names = format_crew_list(trip["crew"])
         dep_str = utc_str_to_kyiv_str(trip["started_at"])
         # 1. Сповіщаємо групу моніторингу (статус залишається PLANNED до підтвердження)
         await notify_monitoring(
@@ -82,10 +80,7 @@ async def check_overdue_checkins(bot: Bot):
             continue
         # Фіксуємо, що алерт по поточному 120-хвилинному циклу надіслано
         await mark_trip_reminded(DB_PATH, trip_id)
-        crew_names = ", ".join(
-            f"{m['full_name']} (Team Leader)" if m["is_leader"] else m["full_name"]
-            for m in trip["crew"]
-        )
+        crew_names = format_crew_list(trip["crew"])
         mins = max(0, trip["minutes_ago"] or 0)
         last_by = trip["last_checkin_user_name"] or "Trip start"
         # 1. Червоний алерт у групу моніторингу з кнопкою запиту на чекін
