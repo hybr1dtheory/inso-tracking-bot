@@ -36,7 +36,7 @@ async def check_planned_departures(bot: Bot):
         await mark_trip_reminded(DB_PATH, trip_id)
 
         crew_names = ", ".join(
-            f"{m['full_name']} (Старший)" if m["is_leader"] else m["full_name"]
+            f"{m['full_name']} (Team Leader)" if m["is_leader"] else m["full_name"]
             for m in trip["crew"]
         )
         dep_str = utc_str_to_kyiv_str(trip["started_at"])
@@ -44,12 +44,12 @@ async def check_planned_departures(bot: Bot):
         await notify_monitoring(
             bot,
             text=(
-                f"⏰ <b>НАСТАВ ПЛАНОВИЙ ЧАС ВИЇЗДУ — Поїздка #{trip_id}</b>\n"
-                f"📍 Маршрут: <b>{trip['route_code']}</b>\n"
-                f"👥 Екіпаж: {crew_names}\n"
-                f"🕒 Запланований час: <b>{dep_str}</b>\n\n"
-                "⏳ <i>Очікується підтвердження початку руху від подорожуючих. "
-                "Моніторинг увімкнеться автоматично, щойно екіпаж натисне «Вирушили».</i>"
+                f"⏰ <b>PLANNED DEPARTURE TIME REACHED — Trip #{trip_id}</b>\n"
+                f"📍 Route: <b>{trip['route_code']}</b>\n"
+                f"👥 Crew: {crew_names}\n"
+                f"🕒 Planned time: <b>{dep_str}</b>\n\n"
+                "⏳ <i>Awaiting departure confirmation from the travelers. "
+                "Monitoring will start automatically once the crew taps \"On the Road\".</i>"
             )
         )
         # 2. Сповіщаємо учасників поїздки з кнопкою підтвердження старту
@@ -58,16 +58,16 @@ async def check_planned_departures(bot: Bot):
                 await bot.send_message(
                     chat_id=member["tg_id"],
                     text=(
-                        f"⏰ <b>Настав запланований час виїзду по поїздці #{trip_id}!</b>\n\n"
-                        "Якщо ви вже рушаєте — натисніть кнопку <b>«🚀 Вирушили (Почати зараз)»</b> нижче, "
-                        "щоб активувати моніторинг.\n"
-                        "<i>(Якщо виїзд затримується, натисніть кнопку тоді, коли фактично вирушите).</i>\n\n"
+                        f"⏰ <b>Planned departure time reached for trip #{trip_id}!</b>\n\n"
+                        "If you are already heading out — tap the <b>\"🚀 On the Road (Start Now)\"</b> button below "
+                        "to activate monitoring.\n"
+                        "<i>(If departure is delayed, tap the button when you actually set off).</i>\n\n"
                         + format_trip_card(trip)
                     ),
                     reply_markup=build_planned_trip_keyboard(trip_id)
                 )
             except Exception as e:
-                logger.warning(f"Не вдалося надіслати нагадування виїзду учаснику {member['tg_id']}: {e}")
+                logger.warning(f"Unable to send a departure reminder to the user {member['tg_id']}: {e}")
 
 
 async def check_overdue_checkins(bot: Bot):
@@ -83,21 +83,21 @@ async def check_overdue_checkins(bot: Bot):
         # Фіксуємо, що алерт по поточному 120-хвилинному циклу надіслано
         await mark_trip_reminded(DB_PATH, trip_id)
         crew_names = ", ".join(
-            f"{m['full_name']} (Старший)" if m["is_leader"] else m["full_name"]
+            f"{m['full_name']} (Team Leader)" if m["is_leader"] else m["full_name"]
             for m in trip["crew"]
         )
         mins = max(0, trip["minutes_ago"] or 0)
-        last_by = trip["last_checkin_user_name"] or "Старт поїздки"
+        last_by = trip["last_checkin_user_name"] or "Trip start"
         # 1. Червоний алерт у групу моніторингу з кнопкою запиту на чекін
         await notify_monitoring(
             bot,
             text=(
-                f"🔴 <b>УВАГА: ПРОСТРОЧЕНО ЧЕКІН — Поїздка #{trip_id}</b>\n"
-                f"📍 Маршрут: <b>{trip['route_code']}</b>\n"
-                f"👥 Екіпаж: {crew_names}\n"
-                f"🕒 Останній чекін: <b>{mins} хв тому</b> ({last_by})\n"
-                f"⏱ Нормативний інтервал: <b>{trip['checkin_interval_min']} хв</b>\n\n"
-                "Перейдіть в бот, щоб надіслати запит на чекін"
+                f"🔴 <b>ATTENTION: OVERDUE CHECK-IN — Trip #{trip_id}</b>\n"
+                f"📍 Route: <b>{trip['route_code']}</b>\n"
+                f"👥 Crew: {crew_names}\n"
+                f"🕒 Last check-in: <b>{mins} min ago</b> ({last_by})\n"
+                f"⏱ Standard interval: <b>{trip['checkin_interval_min']} min</b>\n\n"
+                "Go to the bot to send a check-in request"
             )
         )
         # 2. Автоматичне нагадування подорожуючим
@@ -106,25 +106,25 @@ async def check_overdue_checkins(bot: Bot):
                 await bot.send_message(
                     chat_id=member["tg_id"],
                     text=(
-                        f"⚠️ <b>Час планового чекіну! (Поїздка #{trip_id})</b>\n\n"
-                        f"Маршрут: <b>{trip['route_code']}</b>\n"
-                        f"Минуло <b>{mins} хв</b> з моменту останнього зв'язку.\n"
-                        "Будь ласка, підтвердіть, що у вас все гаразд:"
+                        f"⚠️ <b>Scheduled check-in time! (Trip #{trip_id})</b>\n\n"
+                        f"Route: <b>{trip['route_code']}</b>\n"
+                        f"<b>{mins} min</b> have passed since your last check-in.\n"
+                        "Please confirm that everything is okay:"
                     ),
                     reply_markup=build_checkin_response_keyboard(trip_id)
                 )
             except Exception as e:
-                logger.warning(f"Не вдалося надіслати нагадування чекіну учаснику {member['tg_id']}: {e}")
+                logger.warning(f"Failed to send a check-in reminder to the user {member['tg_id']}: {e}")
 
 
 async def watchdog_loop(bot: Bot):
     """Головний фоновий цикл моніторингу (кожні 30 секунд)."""
-    logger.info("⏱ Watchdog-сервіс запущено (контроль виїздів та інтервалу 120 хв).")
+    logger.info("⏱ The watchdog service has been started (monitoring departures and intervals).")
     while True:
         try:
             await check_planned_departures(bot)
             await check_overdue_checkins(bot)
         except Exception as e:
-            logger.error(f"Помилка у циклі watchdog: {e}")
+            logger.error(f"Watchdog loop error: {e}")
 
         await asyncio.sleep(30)

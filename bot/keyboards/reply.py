@@ -3,10 +3,10 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder
 
 
 # Константи текстів кнопок (використовуються і в клавіатурі, і у фільтрах хендлерів)
-BTN_NEW_TRIP = "🚗 Нова поїздка"
-BTN_MY_TRIP = "📍 Моя поїздка"
-BTN_TRIPS_DASHBOARD = "📋 Моніторинг поїздок"
-BTN_ADMIN_PANEL = "🛠 Адмін-панель"
+BTN_NEW_TRIP = "🚗 New trip"
+BTN_MY_TRIP = "📍 My trip"
+BTN_TRIPS_DASHBOARD = "📋 Trips monitoring"
+BTN_ADMIN_PANEL = "🛠 Admin panel"
 
 
 def get_main_menu_keyboard(role: str) -> ReplyKeyboardMarkup:
@@ -34,5 +34,5 @@ def get_main_menu_keyboard(role: str) -> ReplyKeyboardMarkup:
     return builder.as_markup(
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="Оберіть дію в меню..."
+        input_field_placeholder="Select an option from the menu..."
     )

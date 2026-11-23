@@ -54,7 +54,7 @@ def utc_str_to_kyiv_str(utc_str: str) -> str:
         dt_utc = datetime.strptime(utc_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC_TZ)
         dt_kyiv = dt_utc.astimezone(KYIV_TZ)
         # Кирилична 'о' винесена за межі strftime для сумісності з Windows
-        return f"{dt_kyiv.strftime('%d.%m')} о {dt_kyiv.strftime('%H:%M')}"
+        return f"{dt_kyiv.strftime('%d.%m')} at {dt_kyiv.strftime('%H:%M')}"
     except Exception:
         return utc_str
 
@@ -105,7 +105,7 @@ def parse_kyiv_departure_time(text: str) -> tuple[datetime | None, str | None]:
             if not year_str and dt_kyiv < now_kyiv - timedelta(days=30):
                 dt_kyiv = datetime(year + 1, month, day, hour, minute, tzinfo=KYIV_TZ)
         dt_utc = dt_kyiv.astimezone(UTC_TZ)
-        kyiv_label = f"{dt_kyiv.strftime('%d.%m.%Y')} о {dt_kyiv.strftime('%H:%M')}"
+        kyiv_label = f"{dt_kyiv.strftime('%d.%m.%Y')} at {dt_kyiv.strftime('%H:%M')}"
         return dt_utc, kyiv_label
     except ValueError as e:
         # Логуємо точну причину, якщо ввели неіснуючу дату (напр. 32.11 або 25:00)
@@ -116,35 +116,35 @@ def parse_kyiv_departure_time(text: str) -> tuple[datetime | None, str | None]:
 def format_trip_card(trip: dict) -> str:
     """Формує картку поїздки залежно від її статусу (PLANNED або ACTIVE)."""
     crew_names = [
-        f"{m['full_name']} (Старший)" if m["is_leader"] else m["full_name"]
+        f"{m['full_name']} (Team Leader)" if m["is_leader"] else m["full_name"]
         for m in trip["crew"]
     ]
     if trip["status"] == "PLANNED":
         dep_str = utc_str_to_kyiv_str(trip["started_at"])
         return (
-            f"📅 <b>Запланована поїздка #{trip['id']}</b>\n"
-            f"📍 Маршрут: <b>{trip['origin']} → {trip['destination']}</b>\n"
-            f"👥 Екіпаж: {', '.join(crew_names)}\n"
-            f"🕒 Виїзд: <b>{dep_str}</b>\n"
-            f"⏱ Інтервал чекіну: <b>{trip['checkin_interval_min']} хв</b>\n\n"
-            "<i>Моніторинг розпочнеться після вашого підтвердження виїзду кнопкою нижче.</i>"
+            f"📅 <b>Planned trip #{trip['id']}</b>\n"
+            f"📍 Route: <b>{trip['origin']} → {trip['destination']}</b>\n"
+            f"👥 Crew: {', '.join(crew_names)}\n"
+            f"🕒 Departure: <b>{dep_str}</b>\n"
+            f"⏱ Check-in interval: <b>{trip['checkin_interval_min']} min</b>\n\n"
+            "<i>Monitoring will begin after you confirm departure using the button below.</i>"
         )
     minutes_ago = max(0, trip["minutes_ago"] or 0)
-    last_by = trip["last_checkin_user_name"] or "Старт поїздки"
+    last_by = trip["last_checkin_user_name"] or "Trip start"
     location_line = (
-        f"\n📌 Остання локація: <i>{trip['last_checkin_note']}</i>"
+        f"\n📌 Last location: <i>{trip['last_checkin_note']}</i>"
         if trip.get("last_checkin_note") else ""
     )
     ping_warning = (
-        "\n⚠️ <b>Моніторинг очікує вашого чекіну із зазначенням локації!</b>\n"
+        "\n⚠️ <b>Monitoring is awaiting your check-in with location!</b>\n"
         if trip["pending_request_sent_at"] else ""
     )
     return (
-        f"🚗 <b>Активна поїздка #{trip['id']}</b>\n"
-        f"📍 Маршрут: <b>{trip['origin']} → {trip['destination']}</b>\n"
-        f"👥 Екіпаж: {', '.join(crew_names)}\n"
-        f"⏱ Інтервал чекіну: кожні <b>{trip['checkin_interval_min']} хв</b>\n"
-        f"🕒 Останній чекін: <b>{minutes_ago} хв тому</b> ({last_by})"
+        f"🚗 <b>Active trip #{trip['id']}</b>\n"
+        f"📍 Route: <b>{trip['origin']} → {trip['destination']}</b>\n"
+        f"👥 Crew: {', '.join(crew_names)}\n"
+        f"⏱ Check-in interval: every <b>{trip['checkin_interval_min']} min</b>\n"
+        f"🕒 Last check-in: <b>{minutes_ago} min ago</b> ({last_by})"
         f"{location_line}"
         f"{ping_warning}"
     )
@@ -187,21 +187,21 @@ async def notify_other_crew_members(bot: Bot, trip: dict, actor_user_id: int, te
 @traveler_router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext):
     if await state.get_state() is None:
-        await message.answer("Немає активного процесу для скасування.")
+        await message.answer("There is no active process to cancel.")
         return
     await state.clear()
-    await message.answer("❌ Дію скасовано.")
+    await message.answer("❌ Action cancelled.")
 
 
 @traveler_router.message(or_f(Command("new_trip"), F.text == BTN_NEW_TRIP))
 async def cmd_new_trip(message: Message, db_user: dict | None, state: FSMContext):
     if not db_user:
-        await message.answer("Спочатку зареєструйтесь командою /start.")
+        await message.answer("Please register first using the /start command.")
         return
     await state.clear()
     await message.answer(
-        "🚗 <b>Оформлення нової поїздки</b>\n\n"
-        "Крок 1/4. Введіть <b>пункт відправлення</b> (наприклад, <i>Київ</i>):",
+        "🚗 <b>New Trip Setup</b>\n\n"
+        "Step 1/4. Enter the <b>point of departure</b> (e.g., <i>Kyiv</i>):",
         reply_markup=build_cancel_creation_keyboard()
     )
     await state.set_state(NewTripFSM.waiting_for_origin)
@@ -211,13 +211,13 @@ async def cmd_new_trip(message: Message, db_user: dict | None, state: FSMContext
 async def cmd_my_trip(message: Message, db_user: dict | None, state: FSMContext):
     await state.clear()
     if not db_user:
-        await message.answer("Спочатку зареєструйтесь командою /start.")
+        await message.answer("Please register first using the /start command.")
         return
     trips = await get_user_active_trips(DB_PATH, db_user["id"])
     if not trips:
         await message.answer(
-            "🟢 У вас немає активних або запланованих поїздок.\n"
-            "Натисніть <b>«🚗 Нова поїздка»</b> в меню, щоб створити відрядження."
+            "🟢 You have no active or planned trips.\n"
+            "Tap <b>«🚗 New Trip»</b> in the menu to create a trip."
         )
         return
     for trip in trips:
@@ -235,12 +235,12 @@ async def cmd_my_trip(message: Message, db_user: dict | None, state: FSMContext)
 @traveler_router.callback_query(F.data == "trip_create_cancel")
 async def cb_cancel_creation(callback: CallbackQuery, state: FSMContext):
     if await state.get_state() is None:
-        await callback.answer("Процес вже завершено.", show_alert=True)
+        await callback.answer("The process has already been completed.", show_alert=True)
         await callback.message.edit_reply_markup(reply_markup=None)
         return
-    await callback.answer("Скасовано")
+    await callback.answer("Cancelled")
     await state.clear()
-    await callback.message.edit_text("❌ Оформлення поїздки скасовано.")
+    await callback.message.edit_text("❌ Trip creation cancelled.")
 
 
 @traveler_router.message(NewTripFSM.waiting_for_origin, F.text)
@@ -248,8 +248,8 @@ async def process_origin(message: Message, state: FSMContext):
     origin = message.text.strip()
     await state.update_data(origin=origin)
     await message.answer(
-        f"Відправлення: <b>{origin}</b>\n\n"
-        "Крок 2/4. Введіть <b>пункт призначення</b> (наприклад, <i>Дніпро</i>):",
+        f"Departure: <b>{origin}</b>\n\n"
+        "Step 2/4. Enter the <b>destination</b> (e.g., <i>Dnipro</i>):",
         reply_markup=build_cancel_creation_keyboard()
     )
     await state.set_state(NewTripFSM.waiting_for_destination)
@@ -261,10 +261,10 @@ async def process_destination(message: Message, state: FSMContext):
     await state.update_data(destination=destination)
     now_str = datetime.now(KYIV_TZ).strftime("%d.%m %H:%M")
     await message.answer(
-        f"Маршрут: <b>{(await state.get_data())['origin']} → {destination}</b>\n\n"
-        "Крок 3/4. Введіть <b>час відправлення</b> за київським часом:\n"
-        "• Формат <code>ГГ:ХХ</code> (наприклад, <code>09:30</code>) — на сьогодні/завтра\n"
-        f"• Формат <code>ДД.ММ ГГ:ХХ</code> (наприклад, <code>{now_str}</code>) — на конкретну дату",
+        f"Route: <b>{(await state.get_data())['origin']} → {destination}</b>\n\n"
+        "Step 3/4. Enter the <b>departure time</b> (Kyiv time):\n"
+        "• Format <code>HH:MM</code> (e.g., <code>09:30</code>) — for today/tomorrow\n"
+        f"• Format <code>DD.MM HH:MM</code> (e.g., <code>{now_str}</code>) — for a specific date",
         reply_markup=build_cancel_creation_keyboard()
     )
     await state.set_state(NewTripFSM.waiting_for_departure_time)
@@ -275,7 +275,7 @@ async def process_departure_time(message: Message, db_user: dict, state: FSMCont
     dt_utc, kyiv_label = parse_kyiv_departure_time(message.text)
     if not dt_utc:
         await message.answer(
-            "❌ Невірний формат часу. Введіть, наприклад, <code>08:30</code> або <code>18.11 08:30</code>:",
+            "❌ Invalid time format. Enter, for example, <code>08:30</code> or <code>18.11 08:30</code>:",
             reply_markup=build_cancel_creation_keyboard()
         )
         return
@@ -289,9 +289,9 @@ async def process_departure_time(message: Message, db_user: dict, state: FSMCont
         comp_page=0
     )
     await message.answer(
-        f"🕒 Час виїзду: <b>{kyiv_label}</b>\n\n"
-        f"Крок 4/4. Ви (<b>{db_user['full_name']}</b>) автоматично призначені старшим поїздки.\n"
-        "Якщо їдете самі — натисніть верхню кнопку. Якщо групою — відмітьте супутників:",
+        f"🕒 Departure time: <b>{kyiv_label}</b>\n\n"
+        f"Step 4/4. You (<b>{db_user['full_name']}</b>) are automatically assigned as the trip leader.\n"
+        "If traveling solo — tap the top button. If traveling in a group — select your companions:",
         reply_markup=build_companions_keyboard(other_users, [], page=0)
     )
     await state.set_state(NewTripFSM.waiting_for_companions)
@@ -330,7 +330,7 @@ async def toggle_companion(callback: CallbackQuery, state: FSMContext):
 
 @traveler_router.callback_query(NewTripFSM.waiting_for_companions, F.data == "trip_confirm_companions")
 async def finalize_planned_trip(callback: CallbackQuery, db_user: dict, state: FSMContext, bot: Bot):
-    await callback.answer("Поїздку заплановано!")
+    await callback.answer("Trip planned!")
     data = await state.get_data()
     await state.clear()
     trip_id = await create_trip(
@@ -343,7 +343,7 @@ async def finalize_planned_trip(callback: CallbackQuery, db_user: dict, state: F
         interval_min=CHECKIN_INTERVAL_MIN
     )
     if not trip_id:
-        await callback.message.edit_text("❌ Помилка збереження поїздки в базі даних.")
+        await callback.message.edit_text("❌ Error saving the trip to the database.")
         return
     trip = await get_trip_details(DB_PATH, trip_id)
     # Показуємо картку запланованої поїздки ініціатору
@@ -357,25 +357,25 @@ async def finalize_planned_trip(callback: CallbackQuery, db_user: dict, state: F
         trip,
         actor_user_id=db_user["id"],
         text=(
-            f"📅 <b>{db_user['full_name']} додав(ла) вас до запланованої поїздки #{trip_id}</b>\n\n"
+            f"📅 <b>{db_user['full_name']} added you to planned trip #{trip_id}</b>\n\n"
             + format_trip_card(trip)
         ),
         reply_markup=build_planned_trip_keyboard(trip_id)
     )
     # Сповіщаємо групу моніторингу про заплановану поїздку
     crew_names = ", ".join(
-        f"{m['full_name']} (Старший)" if m["is_leader"] else m["full_name"]
+        f"{m['full_name']} (Team Leader)" if m["is_leader"] else m["full_name"]
         for m in trip["crew"]
     )
     dep_str = utc_str_to_kyiv_str(trip["started_at"])
     await notify_monitoring(
         bot,
         text=(
-            f"📅 <b>ЗАПЛАНОВАНО НОВУ ПОЇЗДКУ #{trip_id}</b>\n"
-            f"📍 Маршрут: <b>{trip['route_code']}</b>\n"
-            f"👥 Екіпаж: {crew_names}\n"
-            f"🕒 Плановий виїзд: <b>{dep_str}</b>\n"
-            f"👤 Оформив(ла): <b>{db_user['full_name']}</b>"
+            f"📅 <b>NEW TRIP PLANNED #{trip_id}</b>\n"
+            f"📍 Route: <b>{trip['route_code']}</b>\n"
+            f"👥 Crew: {crew_names}\n"
+            f"🕒 Planned departure: <b>{dep_str}</b>\n"
+            f"👤 Created by: <b>{db_user['full_name']}</b>"
         )
     )
 
@@ -390,32 +390,32 @@ async def process_manual_start(callback: CallbackQuery, db_user: dict | None, bo
     trip_id = int(callback.data.split(":")[1])
     activated = await activate_trip(DB_PATH, trip_id, actor_user_id=db_user["id"])
     if not activated:
-        await callback.answer("Поїздка вже активна або була скасована.", show_alert=True)
+        await callback.answer("The trip is already active or has been cancelled.", show_alert=True)
         return
-    await callback.answer("🚀 Поїздку розпочато! Гарної дороги!")
+    await callback.answer("🚀 Trip started! Have a safe trip!")
     trip = await get_trip_details(DB_PATH, trip_id)
     await callback.message.edit_text(
-        text=format_trip_card(trip) + "\n\n🚀 <i>Моніторинг розпочато!</i>",
+        text=format_trip_card(trip) + "\n\n🚀 <i>Monitoring started!</i>",
         reply_markup=build_traveler_trip_keyboard(trip_id)
     )
     crew_names = ", ".join(
-        f"{m['full_name']} (Старший)" if m["is_leader"] else m["full_name"]
+        f"{m['full_name']} (Team Leader)" if m["is_leader"] else m["full_name"]
         for m in trip["crew"]
     )
     await notify_monitoring(
         bot,
         text=(
-            f"🚀 <b>СТАРТ ПОЇЗДКИ #{trip_id}</b> ({trip['route_code']})\n"
-            f"👥 Екіпаж: {crew_names}\n"
-            f"▶️ Розпочав(ла): <b>{db_user['full_name']}</b>\n"
-            f"⏱ Інтервал чекіну (СОП): <b>{trip['checkin_interval_min']} хв</b>"
+            f"🚀 <b>TRIP STARTED #{trip_id}</b> ({trip['route_code']})\n"
+            f"👥 Crew: {crew_names}\n"
+            f"▶️ Started by: <b>{db_user['full_name']}</b>\n"
+            f"⏱ Check-in interval (SOP): <b>{trip['checkin_interval_min']} min</b>"
         )
     )
     await notify_other_crew_members(
         bot,
         trip,
         actor_user_id=db_user["id"],
-        text=f"🚀 <b>Поїздку #{trip_id} розпочато!</b> ({db_user['full_name']})\n\n" + format_trip_card(trip),
+        text=f"🚀 <b>Trip #{trip_id} started!</b> ({db_user['full_name']})\n\n" + format_trip_card(trip),
         reply_markup=build_traveler_trip_keyboard(trip_id)
     )
 
@@ -427,37 +427,37 @@ async def process_cancel_planned_trip(callback: CallbackQuery, db_user: dict | N
     trip_id = int(callback.data.split(":")[1])
     trip = await get_trip_details(DB_PATH, trip_id)
     if not trip or trip["status"] != "PLANNED":
-        await callback.answer("Поїздку вже розпочато або скасовано раніше.", show_alert=True)
+        await callback.answer("The trip has already started or was cancelled earlier.", show_alert=True)
         return
     cancelled = await cancel_planned_trip(DB_PATH, trip_id, db_user["id"])
     if not cancelled:
-        await callback.answer("Не вдалося скасувати поїздку.", show_alert=True)
+        await callback.answer("Failed to cancel the trip.", show_alert=True)
         return
-    await callback.answer("Поїздку скасовано")
+    await callback.answer("Trip cancelled")
     await callback.message.edit_text(
-        f"❌ <b>Заплановану поїздку #{trip_id} ({trip['route_code']}) скасовано.</b>"
+        f"❌ <b>Planned trip #{trip_id} ({trip['route_code']}) has been cancelled.</b>"
     )
     # Сповіщаємо інших учасників екіпажу
     await notify_other_crew_members(
         bot,
         trip,
         actor_user_id=db_user["id"],
-        text=f"❌ Заплановану поїздку #{trip_id} ({trip['route_code']}) скасовано користувачем {db_user['full_name']}."
+        text=f"❌ Planned trip #{trip_id} ({trip['route_code']}) was cancelled by {db_user['full_name']}."
     )
     # Сповіщаємо групу моніторингу (щоб закрити запис про запланований виїзд у стрічці)
     crew_names = ", ".join(
-        f"{m['full_name']} (Старший)" if m["is_leader"] else m["full_name"]
+        f"{m['full_name']} (Team Leader)" if m["is_leader"] else m["full_name"]
         for m in trip["crew"]
     )
     dep_str = utc_str_to_kyiv_str(trip["started_at"])
     await notify_monitoring(
         bot,
         text=(
-            f"❌ <b>ЗАПЛАНОВАНО ПОЇЗДКУ СКАСОВАНО #{trip_id}</b>\n"
-            f"📍 Маршрут: <b>{trip['route_code']}</b>\n"
-            f"👥 Екіпаж: {crew_names}\n"
-            f"🕒 Плановий виїзд був: <b>{dep_str}</b>\n"
-            f"👤 Скасував(ла): <b>{db_user['full_name']}</b>"
+            f"❌ <b>PLANNED TRIP CANCELLED #{trip_id}</b>\n"
+            f"📍 Route: <b>{trip['route_code']}</b>\n"
+            f"👥 Crew: {crew_names}\n"
+            f"🕒 Planned departure was: <b>{dep_str}</b>\n"
+            f"👤 Cancelled by: <b>{db_user['full_name']}</b>"
         )
     )
 
@@ -471,15 +471,15 @@ async def refresh_trip_card(callback: CallbackQuery, state: FSMContext):
     trip_id = int(callback.data.split(":")[1])
     trip = await get_trip_details(DB_PATH, trip_id)
     if not trip or trip["status"] not in ("ACTIVE", "PLANNED"):
-        await callback.answer("Ця поїздка вже завершена.", show_alert=True)
-        await callback.message.edit_text("🏁 Поїздку завершено.")
+        await callback.answer("This trip has already been completed.", show_alert=True)
+        await callback.message.edit_text("🏁 Trip completed.")
         return
     kb = (
         build_planned_trip_keyboard(trip_id)
         if trip["status"] == "PLANNED"
         else build_traveler_trip_keyboard(trip_id)
     )
-    await callback.answer("Статус оновлено")
+    await callback.answer("Status updated")
     try:
         await callback.message.edit_text(text=format_trip_card(trip), reply_markup=kb)
     except Exception:
@@ -492,15 +492,15 @@ async def ask_checkin_note(callback: CallbackQuery, state: FSMContext):
     trip_id = int(callback.data.split(":")[1])
     trip = await get_trip_details(DB_PATH, trip_id)
     if not trip or trip["status"] != "ACTIVE":
-        await callback.answer("Поїздка не активна.", show_alert=True)
+        await callback.answer("The trip is not active.", show_alert=True)
         return
     await callback.answer()
     await state.update_data(note_trip_id=trip_id)
     await state.set_state(TravelerNoteFSM.waiting_for_note)
     await callback.message.edit_text(
-        f"📍 <b>Чекін по поїздці #{trip_id} ({trip['route_code']})</b>\n\n"
-        "Вкажіть ваше <b>приблизне місцезнаходження</b> або поточний статус "
-        "(наприклад: <i>«проїхали Прилуки»</i> або <i>«у Чернігові, зупинка 15 хв»</i>):",
+        f"📍 <b>Check-in for trip #{trip_id} ({trip['route_code']})</b>\n\n"
+        "Specify your <b>approximate location</b> or current status "
+        "(e.g., <i>\"passed Pryluky\"</i> or <i>\"in Chernihiv, 15 min stop\"</i>):",
         reply_markup=build_cancel_note_keyboard(trip_id)
     )
 
@@ -515,28 +515,28 @@ async def process_checkin_note(message: Message, db_user: dict | None, state: FS
     await state.clear()
     event_type = await record_checkin(DB_PATH, trip_id, db_user["id"], note=location_note)
     if not event_type:
-        await message.answer("🏁 Ця поїздка вже завершена.")
+        await message.answer("🏁 This trip has already been completed.")
         return
     trip = await get_trip_details(DB_PATH, trip_id)
     await message.answer(
-        text=format_trip_card(trip) + f"\n\n✅ <i>Чекін зафіксовано: «{location_note}»</i>",
+        text=format_trip_card(trip) + f"\n\n✅ <i>Check-in recorded: \"{location_note}\"</i>",
         reply_markup=build_traveler_trip_keyboard(trip_id)
     )
-    kind_label = "за запитом оператора" if event_type == "REQUESTED_CHECKIN" else "плановий"
+    kind_label = "requested by operator" if event_type == "REQUESTED_CHECKIN" else "scheduled"
     await notify_monitoring(
         bot,
-        f"🟢 <b>ЧЕКІН — Поїздка #{trip_id}</b> ({trip['route_code']})\n"
-        f"👤 Від: <b>{db_user['full_name']}</b> ({kind_label})\n"
-        f"📍 Локація / коментар: <b>{location_note}</b>\n"
-        f"⏱ Наступний контроль через {trip['checkin_interval_min']} хв."
+        f"🟢 <b>CHECK-IN — Trip #{trip_id}</b> ({trip['route_code']})\n"
+        f"👤 From: <b>{db_user['full_name']}</b> ({kind_label})\n"
+        f"📍 Location / comment: <b>{location_note}</b>\n"
+        f"⏱ Next check-in in {trip['checkin_interval_min']} min."
     )
     await notify_other_crew_members(
         bot,
         trip,
         actor_user_id=db_user["id"],
         text=(
-            f"ℹ️ <b>Поїздка #{trip_id} ({trip['route_code']}):</b>\n"
-            f"{db_user['full_name']} зробив(ла) чекін: <i>«{location_note}»</i>"
+            f"ℹ️ <b>Trip #{trip_id} ({trip['route_code']}):</b>\n"
+            f"{db_user['full_name']} checked in: <i>\"{location_note}\"</i>"
         )
     )
 
@@ -551,19 +551,19 @@ async def execute_help_alert(
         return None
     trip = await get_trip_details(DB_PATH, trip_id)
     crew_names = ", ".join(
-        f"{m['full_name']} (Старший)" if m["is_leader"] else m["full_name"]
+        f"{m['full_name']} (Team Leader)" if m["is_leader"] else m["full_name"]
         for m in trip["crew"]
     )
-    comment_block = f"💬 <b>Деталі:</b> <i>{comment}</i>" if comment else "💬 <b>Деталі:</b> <i>Без коментаря (терміновий виклик)</i>"
+    comment_block = f"💬 <b>Details:</b> <i>{comment}</i>" if comment else "💬 <b>Details:</b> <i>No comment (urgent alert)</i>"
     # Термінове сповіщення в групу моніторингу
     await notify_monitoring(
         bot,
-        f"🚨🆘 <b>ПОТРІБНА ДОПОМОГА — Поїздка #{trip_id}</b>\n"
-        f"📍 Маршрут: <b>{trip['route_code']}</b>\n"
-        f"👤 Сигнал від: <b>{db_user['full_name']}</b>\n"
-        f"👥 Весь екіпаж: {crew_names}\n"
+        f"🚨🆘 <b>NEED HELP — Trip #{trip_id}</b>\n"
+        f"📍 Route: <b>{trip['route_code']}</b>\n"
+        f"👤 Alert from: <b>{db_user['full_name']}</b>\n"
+        f"👥 Full crew: {crew_names}\n"
         f"{comment_block}\n\n"
-        "❗️ <b>Негайно зв'яжіться з екіпажем!</b>"
+        "❗️ <b>Contact the crew immediately!</b>"
     )
     # Сповіщення іншим учасникам цієї поїздки
     await notify_other_crew_members(
@@ -571,8 +571,8 @@ async def execute_help_alert(
         trip,
         actor_user_id=db_user["id"],
         text=(
-            f"🚨 <b>Поїздка #{trip_id}:</b> {db_user['full_name']} надіслав(ла) запит "
-            f"<b>«Потрібна допомога»</b> у відділ моніторингу!\n{comment_block}"
+            f"🚨 <b>Trip #{trip_id}:</b> {db_user['full_name']} sent a "
+            f"<b>\"Need help\"</b> request to monitoring!\n{comment_block}"
         )
     )
     return trip
@@ -583,15 +583,15 @@ async def ask_help_comment(callback: CallbackQuery, state: FSMContext):
     trip_id = int(callback.data.split(":")[1])
     trip = await get_trip_details(DB_PATH, trip_id)
     if not trip or trip["status"] != "ACTIVE":
-        await callback.answer("Поїздка не активна.", show_alert=True)
+        await callback.answer("The trip is not active.", show_alert=True)
         return
     await callback.answer()
     await state.update_data(help_trip_id=trip_id)
     await state.set_state(TravelerNoteFSM.waiting_for_help_comment)
     await callback.message.edit_text(
-        f"🆘 <b>Запит про допомогу — Поїздка #{trip_id}</b>\n\n"
-        "Напишіть у повідомленні, <b>що саме сталося, де ви знаходитесь і яка допомога потрібна</b>.\n\n"
-        "<i>Якщо ситуація екстрена і немає часу писати текст — натисніть кнопку нижче:</i>",
+        f"🆘 <b>Help Request — Trip #{trip_id}</b>\n\n"
+        "Write in a message <b>what happened, where you are located, and what kind of help is needed</b>.\n\n"
+        "<i>If this is an emergency and you don't have time to type — tap the button below:</i>",
         reply_markup=build_help_comment_keyboard(trip_id)
     )
 
@@ -604,13 +604,13 @@ async def process_help_without_comment(callback: CallbackQuery, db_user: dict | 
     trip_id = int(callback.data.split(":")[1])
     trip = await execute_help_alert(bot, db_user, trip_id, comment=None)
     if not trip:
-        await callback.answer("Поїздка вже завершена.", show_alert=True)
+        await callback.answer("The trip has already been completed.", show_alert=True)
         return
-    await callback.answer("🚨 Сигнал про допомогу надіслано!", show_alert=True)
+    await callback.answer("🚨 Help signal sent!", show_alert=True)
     await callback.message.edit_text(
         text=(
             format_trip_card(trip)
-            + "\n\n🚨 <b>Запит «Потрібна допомога» передано в моніторинг! Очікуйте на зв'язок.</b>"
+            + "\n\n🚨 <b>\"Need help\" request has been forwarded to monitoring! Standby for contact.</b>"
         ),
         reply_markup=build_traveler_trip_keyboard(trip_id)
     )
@@ -626,12 +626,12 @@ async def process_help_with_comment(message: Message, db_user: dict | None, stat
     await state.clear()
     trip = await execute_help_alert(bot, db_user, trip_id, comment=comment_text)
     if not trip:
-        await message.answer("🏁 Ця поїздка вже завершена.")
+        await message.answer("🏁 This trip has already been completed.")
         return
     await message.answer(
         text=(
             format_trip_card(trip)
-            + f"\n\n🚨 <b>Запит про допомогу («{comment_text}») передано в моніторинг! Очікуйте на зв'язок.</b>"
+            + f"\n\n🚨 <b>Help request (\"{comment_text}\") has been forwarded to monitoring! Standby for contact.</b>"
         ),
         reply_markup=build_traveler_trip_keyboard(trip_id)
     )
@@ -643,12 +643,12 @@ async def ask_close_confirmation(callback: CallbackQuery):
     trip_id = int(callback.data.split(":")[1])
     trip = await get_trip_details(DB_PATH, trip_id)
     if not trip or trip["status"] != "ACTIVE":
-        await callback.answer("Поїздка вже завершена.", show_alert=True)
+        await callback.answer("The trip has already been completed.", show_alert=True)
         return
     await callback.answer()
     await callback.message.edit_text(
-        f"🏁 <b>Підтвердження прибуття</b>\n\n"
-        f"Ви дійсно прибули в <b>{trip['destination']}</b> і хочете закрити поїздку #{trip_id}?",
+        f"🏁 <b>Arrival Confirmation</b>\n\n"
+        f"Have you really arrived in <b>{trip['destination']}</b> and want to close trip #{trip_id}?",
         reply_markup=build_close_confirm_keyboard(trip_id)
     )
 
@@ -660,25 +660,25 @@ async def confirm_close_trip(callback: CallbackQuery, db_user: dict | None, bot:
     trip_id = int(callback.data.split(":")[1])
     trip = await get_trip_details(DB_PATH, trip_id)
     if not trip or trip["status"] != "ACTIVE":
-        await callback.answer("Поїздку вже закрито раніше.", show_alert=True)
+        await callback.answer("The trip has already been closed.", show_alert=True)
         return
     if not await close_trip(DB_PATH, trip_id, db_user["id"]):
-        await callback.answer("Помилка при закритті.", show_alert=True)
+        await callback.answer("Error closing the trip.", show_alert=True)
         return
-    await callback.answer("🏁 З прибуттям!")
+    await callback.answer("🏁 Welcome upon arrival!")
     await callback.message.edit_text(
-        f"🏁 <b>Поїздку #{trip_id} ({trip['route_code']}) успішно завершено!</b>\n"
-        f"Закрив(ла): {db_user['full_name']}."
+        f"🏁 <b>Trip #{trip_id} ({trip['route_code']}) successfully completed!</b>\n"
+        f"Closed by: {db_user['full_name']}."
     )
     await notify_monitoring(
         bot,
-        f"🏁 <b>Поїздку #{trip_id} ЗАВЕРШЕНО</b>\n"
-        f"📍 Маршрут: <b>{trip['route_code']}</b>\n"
-        f"👤 Підтвердив прибуття: <b>{db_user['full_name']}</b>"
+        f"🏁 <b>Trip #{trip_id} COMPLETED</b>\n"
+        f"📍 Route: <b>{trip['route_code']}</b>\n"
+        f"👤 Arrival confirmed by: <b>{db_user['full_name']}</b>"
     )
     await notify_other_crew_members(
         bot,
         trip,
         actor_user_id=db_user["id"],
-        text=f"🏁 <b>Поїздку #{trip_id} ({trip['route_code']}) завершено!</b> ({db_user['full_name']})"
+        text=f"🏁 <b>Trip #{trip_id} ({trip['route_code']}) completed!</b> ({db_user['full_name']})"
     )

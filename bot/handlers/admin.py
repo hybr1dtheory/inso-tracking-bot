@@ -34,14 +34,14 @@ class AdminMenu(StatesGroup):
 # --- Допоміжні функції адмінки ---
 def format_user_card_text(user: dict) -> str:
     """Текст картки вибраного користувача."""
-    username_str = f"@{user['username']}" if user.get("username") else "не вказано"
+    username_str = f"@{user['username']}" if user.get("username") else "not specified"
     return (
-        f"👤 <b>Картка користувача</b>\n\n"
-        f"• <b>ПІБ:</b> {user['full_name']}\n"
+        f"👤 <b>User information</b>\n\n"
+        f"• <b>Full Name:</b> {user['full_name']}\n"
         f"• <b>Telegram ID:</b> <code>{user['tg_id']}</code>\n"
         f"• <b>Username:</b> {username_str}\n"
-        f"• <b>Роль:</b> <b>{user['role']}</b>\n\n"
-        "Оберіть дію:"
+        f"• <b>Role:</b> <b>{user['role']}</b>\n\n"
+        "Select an action:"
     )
 
 
@@ -54,9 +54,9 @@ async def cmd_admin_panel(message: Message, db_user: dict, state: FSMContext):
     await state.update_data(admin_page=0)
     users = await get_all_users(DB_PATH)
     text = (
-        "🛠 <b>Панель адміністратора</b>\n\n"
-        f"Зареєстровано користувачів: <b>{len(users)}</b>.\n"
-        "Оберіть співробітника для редагування або додайте нового:"
+        "🛠 <b>Administrator Panel</b>\n\n"
+        f"Registered users: <b>{len(users)}</b>.\n"
+        "Select an employee to edit or add a new one:"
     )
     await message.answer(text, reply_markup=build_users_list_keyboard(users, page=0))
 
@@ -67,9 +67,9 @@ async def cb_back_to_users_list(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     users = await get_all_users(DB_PATH)
     text = (
-        "🛠 <b>Панель адміністратора</b>\n\n"
-        f"Зареєстровано користувачів: <b>{len(users)}</b>.\n"
-        "Оберіть співробітника для редагування або додайте нового:"
+        "🛠 <b>Administrator Panel</b>\n\n"
+        f"Registered users: <b>{len(users)}</b>.\n"
+        "Select an employee to edit or add a new one:"
     )
     await callback.message.edit_text(text, reply_markup=build_users_list_keyboard(users, page=page))
 
@@ -109,7 +109,7 @@ async def cb_open_user_card(callback: CallbackQuery, state: FSMContext):
     user_id = int(callback.data.split(":")[1])
     user = await get_user_by_id(DB_PATH, user_id)
     if not user:
-        await callback.answer("Користувача не знайдено.", show_alert=True)
+        await callback.answer("User not found.", show_alert=True)
         return await cb_back_to_users_list(callback, state)
     await callback.answer()
     await callback.message.edit_text(
@@ -126,13 +126,13 @@ async def cb_role_selection_menu(callback: CallbackQuery):
     user_id = int(callback.data.split(":")[1])
     user = await get_user_by_id(DB_PATH, user_id)
     if not user:
-        await callback.answer("Користувача не знайдено.", show_alert=True)
+        await callback.answer("User not found.", show_alert=True)
         return
     await callback.answer()
     await callback.message.edit_text(
-        f"🎭 <b>Зміна ролі для {user['full_name']}</b>\n"
-        f"Поточна роль: <b>{user['role']}</b>\n\n"
-        "Оберіть нову роль:",
+        f"🎭 <b>Role change for {user['full_name']}</b>\n"
+        f"Current role: <b>{user['role']}</b>\n\n"
+        "Select new role:",
         reply_markup=build_admin_role_keyboard(user_id, user["role"])
     )
 
@@ -143,22 +143,22 @@ async def cb_save_new_role(callback: CallbackQuery, db_user: dict, bot: Bot):
     user_id = int(user_id_str)
     target_user = await get_user_by_id(DB_PATH, user_id)
     if not target_user:
-        await callback.answer("Користувача не знайдено.", show_alert=True)
+        await callback.answer("User not found.", show_alert=True)
         return
     # Захист від зняття прав адміністратора із самого себе або головного адміна з .env
     if new_role != "ADMIN" and (target_user["id"] == db_user["id"] or target_user["tg_id"] == ADMIN_TG_ID):
-        await callback.answer("⛔️ Не можна понизити роль власного акаунту або головного адміна!", show_alert=True)
+        await callback.answer("⛔️ You cannot demote the role of your own account or the main admin!", show_alert=True)
         return
     success = await update_user_role(DB_PATH, user_id, new_role)
     if not success:
-        await callback.answer("❌ Помилка при оновленні ролі.", show_alert=True)
+        await callback.answer("❌ Error updating a role.", show_alert=True)
         return
-    await callback.answer(f"✅ Роль змінено на {new_role}")
+    await callback.answer(f"✅ The role has been changed to {new_role}")
     # Оновлюємо нижнє меню кнопок у самого користувача
     try:
         await bot.send_message(
             chat_id=target_user["tg_id"],
-            text=f"🔔 Вашу роль у системі змінено на <b>{new_role}</b>. Меню кнопок оновлено.",
+            text=f"🔔 Your role in the system has been changed to <b>{new_role}</b>.",
             reply_markup=get_main_menu_keyboard(new_role)
         )
     except Exception:
@@ -179,15 +179,15 @@ async def cb_ask_new_fullname(callback: CallbackQuery, state: FSMContext):
     user_id = int(callback.data.split(":")[1])
     user = await get_user_by_id(DB_PATH, user_id)
     if not user:
-        await callback.answer("Користувача не знайдено.", show_alert=True)
+        await callback.answer("User not found.", show_alert=True)
         return
     await callback.answer()
     await state.update_data(rename_user_id=user_id)
     await state.set_state(AdminMenu.waiting_for_renamed_fullname)
     await callback.message.edit_text(
-        f"✏️ <b>Редагування ПІБ</b>\n"
-        f"Поточне ім'я: <b>{user['full_name']}</b>\n\n"
-        "Введіть нове <b>Ім'я та Прізвище</b> співробітника:",
+        f"✏️ <b>Editing Full Name</b>\n"
+        f"Current name: <b>{user['full_name']}</b>\n\n"
+        "Enter the employee's new <b>First Name and Last Name</b> separated by a space:",
         reply_markup=build_cancel_admin_input_keyboard(f"admin_user:{user_id}")
     )
 
@@ -198,18 +198,18 @@ async def process_renamed_fullname(message: Message, state: FSMContext):
     data = await state.get_data()
     user_id = data.get("rename_user_id")
     await state.clear()
-    if len(new_name) < 2:
-        await message.answer("❌ Ім'я занадто коротке. Спробуйте ще раз через /admin.")
+    if len(new_name) < 3:
+        await message.answer("❌ The name is too short. Please try again via /admin")
         return
     success = await update_user_name(DB_PATH, user_id, new_name)
     user = await get_user_by_id(DB_PATH, user_id)
     if success and user:
         await message.answer(
-            f"✅ ПІБ успішно змінено на <b>{new_name}</b>!\n\n" + format_user_card_text(user),
+            f"✅ The full name has been successfully changed to <b>{new_name}</b>!\n\n" + format_user_card_text(user),
             reply_markup=build_user_actions_keyboard(user_id)
         )
     else:
-        await message.answer("❌ Не вдалося оновити ім'я користувача.")
+        await message.answer("❌ Unable to update the user name.")
 
 
 # =====================================================================
@@ -220,17 +220,17 @@ async def cb_ask_delete_user(callback: CallbackQuery, db_user: dict):
     user_id = int(callback.data.split(":")[1])
     target_user = await get_user_by_id(DB_PATH, user_id)
     if not target_user:
-        await callback.answer("Користувача вже видалено.", show_alert=True)
+        await callback.answer("The user has already been deleted.", show_alert=True)
         return
     if target_user["id"] == db_user["id"] or target_user["tg_id"] == ADMIN_TG_ID:
-        await callback.answer("⛔️ Ви не можете видалити власний акаунт або головного адміністратора!", show_alert=True)
+        await callback.answer("⛔️ You cannot delete your own account or the main administrator!", show_alert=True)
         return
     await callback.answer()
     await callback.message.edit_text(
-        f"⚠️ <b>Підтвердження видалення</b>\n\n"
-        f"Ви дійсно хочете видалити користувача <b>{target_user['full_name']}</b> "
-        f"(ID: <code>{target_user['tg_id']}</code>) із системи?\n\n"
-        "<i>Користувач одразу втратить доступ до бота, але історія його попередніх поїздок збережеться.</i>",
+        f"⚠️ <b>Deletion Confirmation</b>\n\n"
+        f"Are you sure you want to delete this user <b>{target_user['full_name']}</b> "
+        f"(ID: <code>{target_user['tg_id']}</code>) from the system?\n\n"
+        "<i>The user will immediately lose access to the bot, but their travel history will be saved.</i>",
         reply_markup=build_admin_delete_confirm_keyboard(user_id)
     )
 
@@ -240,21 +240,21 @@ async def cb_confirm_delete_user(callback: CallbackQuery, db_user: dict, state: 
     user_id = int(callback.data.split(":")[1])
     target_user = await get_user_by_id(DB_PATH, user_id)
     if not target_user:
-        await callback.answer("Користувача вже видалено.", show_alert=True)
+        await callback.answer("The user has already been deleted.", show_alert=True)
         return await cb_back_to_users_list(callback, state)
     if target_user["id"] == db_user["id"] or target_user["tg_id"] == ADMIN_TG_ID:
-        await callback.answer("⛔️ Неможливо видалити цього адміністратора!", show_alert=True)
+        await callback.answer("⛔️ Unable to remove this administrator!", show_alert=True)
         return
     deleted = await delete_user(DB_PATH, user_id)
     if not deleted:
-        await callback.answer("❌ Помилка при видаленні з бази даних.", show_alert=True)
+        await callback.answer("❌ Error while deleting from the database.", show_alert=True)
         return
-    await callback.answer(f"🗑 Користувача {target_user['full_name']} видалено.")
+    await callback.answer(f"🗑 The user {target_user['full_name']} has been deleted.")
     # Прибираємо нижню клавіатуру у видаленого користувача
     try:
         await bot.send_message(
             chat_id=target_user["tg_id"],
-            text="⛔️ Ваш доступ до системи моніторингу поїздок було відкликано адміністратором.",
+            text="⛔️ Your access to the trip monitoring system has been revoked by the administrator.",
             reply_markup=ReplyKeyboardRemove()
         )
     except Exception:
@@ -263,8 +263,8 @@ async def cb_confirm_delete_user(callback: CallbackQuery, db_user: dict, state: 
     page = await _reset_state_keep_page(state)
     users = await get_all_users(DB_PATH)
     await callback.message.edit_text(
-        f"✅ Користувача <b>{target_user['full_name']}</b> видалено з бази.\n\n"
-        f"🛠 <b>Панель адміністратора</b> (усього: {len(users)}):",
+        f"✅ The user <b>{target_user['full_name']}</b> has been deleted.\n\n"
+        f"🛠 <b>Administrator Panel</b> (users: {len(users)}):",
         reply_markup=build_users_list_keyboard(users, page=page)
     )
 
@@ -276,8 +276,8 @@ async def cb_confirm_delete_user(callback: CallbackQuery, db_user: dict, state: 
 async def process_add_new_user(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await callback.message.edit_text(
-        "➕ <b>Додавання нового користувача</b>\n\n"
-        "Введіть <b>Telegram ID</b> співробітника (лише цифри, наприклад <code>123456789</code>):",
+        "➕ <b>Adding a New User</b>\n\n"
+        "Enter the employee's <b>Telegram ID</b> (numbers only, for example <code>1234567890</code>):",
         reply_markup=build_cancel_admin_input_keyboard("admin_back_to_list")
     )
     await state.set_state(AdminMenu.waiting_for_new_user_tgid)
@@ -288,8 +288,8 @@ async def process_new_user_tgid(message: Message, state: FSMContext):
     tg_id = int(message.text.strip())
     await state.update_data(new_user_tgid=tg_id)
     await message.answer(
-        f"Telegram ID: <code>{tg_id}</code> прийнято.\n"
-        "Тепер введіть <b>Ім'я та Прізвище</b> співробітника:",
+        f"Telegram ID: <code>{tg_id}</code> accepted.\n"
+        "Enter employee's <b>First Name and Last Name</b> separated by space:",
         reply_markup=build_cancel_admin_input_keyboard("admin_back_to_list")
     )
     await state.set_state(AdminMenu.waiting_for_new_user_name)
@@ -298,7 +298,7 @@ async def process_new_user_tgid(message: Message, state: FSMContext):
 @admin_router.message(AdminMenu.waiting_for_new_user_tgid)
 async def process_invalid_tgid(message: Message):
     await message.answer(
-        "❌ Помилка! Telegram ID має складатися лише з цифр. Спробуйте ще раз:",
+        "❌ Error! A Telegram ID must consist only of numbers. Please try again:",
         reply_markup=build_cancel_admin_input_keyboard("admin_back_to_list")
     )
 
@@ -315,9 +315,9 @@ async def process_new_user_name(message: Message, state: FSMContext, bot: Bot):
             await bot.send_message(
                 chat_id=tg_id,
                 text=(
-                    f"✅ <b>Ваш акаунт активовано адміністратором!</b>\n"
-                    f"Ім'я в системі: <b>{full_name}</b>\n\n"
-                    "Тепер ви можете користуватися кнопками меню нижче:"
+                    f"✅ <b>Your account has been activated by an administrator!</b>\n"
+                    f"Name: <b>{full_name}</b>\n\n"
+                    "You can now use the menu buttons below:"
                 ),
                 reply_markup=get_main_menu_keyboard("TRAVELER")
             )
@@ -325,9 +325,9 @@ async def process_new_user_name(message: Message, state: FSMContext, bot: Bot):
             pass
         # Одразу відкриваємо картку щойно створеного користувача (щоб за потреби змінити роль)
         await message.answer(
-            f"✅ Користувача <b>{full_name}</b> успішно створено!\n\n"
+            f"✅ The user <b>{full_name}</b> was successfully added!\n\n"
             + format_user_card_text(added_user),
             reply_markup=build_user_actions_keyboard(added_user["id"])
         )
     else:
-        await message.answer("❌ Помилка. Користувач із таким Telegram ID вже існує в базі.")
+        await message.answer("❌ Error. A user with this Telegram ID already exists in the database.")
