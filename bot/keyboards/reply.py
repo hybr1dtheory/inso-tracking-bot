@@ -10,12 +10,12 @@ BTN_ADMIN_PANEL = "🛠 Admin panel"
 
 
 def get_main_menu_keyboard(role: str) -> ReplyKeyboardMarkup:
-    '''
+    """
     Формує постійну нижню клавіатуру залежно від ролі користувача:
-    - TRAVELER: Нова поїздка | Моя поїздка
-    - OPERATOR: Моніторинг поїздок + кнопки мандрівника
-    - ADMIN: Усі кнопки + Адмін-панель
-    '''
+    - TRAVELER: New trip | My trip
+    - OPERATOR: кнопки мандрівника + Trips monitoring
+    - ADMIN: усі кнопки + Admin panel
+    """
     builder = ReplyKeyboardBuilder()
     # Базові кнопки доступні всім
     builder.button(text=BTN_NEW_TRIP)
@@ -24,13 +24,9 @@ def get_main_menu_keyboard(role: str) -> ReplyKeyboardMarkup:
         builder.button(text=BTN_TRIPS_DASHBOARD)
     if role == "ADMIN":
         builder.button(text=BTN_ADMIN_PANEL)
-    # Розмітка сітки кнопок залежно від кількості
-    if role == "TRAVELER":
-        builder.adjust(2)       # 1 ряд по 2 кнопки
-    elif role == "OPERATOR":
-        builder.adjust(2, 1)    # 2 кнопки зверху, Моніторинг — широкою знизу
-    elif role == "ADMIN":
-        builder.adjust(2, 2)    # 2 ряди по 2 кнопки
+    # Розкладка по 2 кнопки в ряд: (2), (2, 1) або (2, 2) залежно від ролі
+    builder.adjust(2)
+
     return builder.as_markup(
         resize_keyboard=True,
         is_persistent=True,
