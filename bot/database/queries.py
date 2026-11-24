@@ -1,9 +1,13 @@
-import aiosqlite
 import logging
+import aiosqlite
 
 
 logger = logging.getLogger(__name__)
 
+
+# =====================================================================
+# ЗАПИТИ ЩОДО КОРИСТУВАЧІВ
+# =====================================================================
 
 async def get_user_by_tg_id(db_path: str, tg_id: int) -> dict | None:
     """Повертає профіль користувача за його Telegram ID."""
@@ -15,13 +19,57 @@ async def get_user_by_tg_id(db_path: str, tg_id: int) -> dict | None:
                 row = await cursor.fetchone()
                 return dict(row) if row else None
     except Exception as e:
-        logger.error(f"Помилка отримання користувача tg_id={tg_id}: {e}")
+        logger.error(f"Failed to fetch user by tg_id={tg_id}: {e}")
         return None
 
 
+async def get_user_by_id(db_path: str, user_id: int) -> dict | None:
+    """Повертає профіль користувача за його внутрішнім id у таблиці users."""
+    query = "SELECT id, tg_id, full_name, team, role FROM users WHERE id = ?"
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, (user_id,)) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Failed to fetch user by id={user_id}: {e}")
+        return None
+
+
+async def get_all_users(db_path: str) -> list[dict]:
+    """Повертає всіх зареєстрованих користувачів, відсортованих за алфавітом."""
+    query = "SELECT id, tg_id, full_name, team, role FROM users ORDER BY full_name ASC"
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+    except Exception as e:
+        logger.error(f"Failed to fetch users list: {e}")
+        return []
+
+
+async def get_operators_tg_ids(db_path: str) -> list[int]:
+    """Повертає Telegram ID усіх операторів та адмінів (використовується, якщо не задано груповий чат)."""
+    query = "SELECT tg_id FROM users WHERE role IN ('OPERATOR', 'ADMIN')"
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            async with db.execute(query) as cursor:
+                rows = await cursor.fetchall()
+                return [r[0] for r in rows]
+    except Exception as e:
+        logger.error(f"Failed to fetch operators list: {e}")
+        return []
+
+
 async def add_new_user(
-    db_path: str, tg_id: int, full_name: str,
-    team: str | None = None, role: str = "TRAVELER"
+    db_path: str,
+    tg_id: int,
+    full_name: str,
+    team: str | None = None,
+    role: str = "TRAVELER"
 ) -> dict | None:
     """Додає нового користувача в таблицю users та повертає його профіль."""
     query = """
@@ -40,22 +88,8 @@ async def add_new_user(
                 "role": role
             }
     except Exception as e:
-        logger.error(f"Помилка додавання користувача tg_id={tg_id}: {e}")
+        logger.error(f"Failed to add new user tg_id={tg_id}: {e}")
         return None
-
-
-async def get_all_users(db_path: str) -> list[dict]:
-    """Повертає всіх зареєстрованих користувачів, відсортованих за алфавітом."""
-    query = "SELECT id, tg_id, full_name, team, role FROM users ORDER BY full_name ASC"
-    try:
-        async with aiosqlite.connect(db_path) as db:
-            db.row_factory = aiosqlite.Row
-            async with db.execute(query) as cursor:
-                rows = await cursor.fetchall()
-                return [dict(row) for row in rows]
-    except Exception as e:
-        logger.error(f"Помилка отримання списку користувачів: {e}")
-        return []
 
 
 async def update_user_role(db_path: str, user_id: int, new_role: str) -> bool:
@@ -63,11 +97,24 @@ async def update_user_role(db_path: str, user_id: int, new_role: str) -> bool:
     query = "UPDATE users SET role = ? WHERE id = ?"
     try:
         async with aiosqlite.connect(db_path) as db:
-            await db.execute(query, (new_role, user_id))
+            cursor = await db.execute(query, (new_role, user_id))
             await db.commit()
-            return True
+            return cursor.rowcount > 0
     except Exception as e:
-        logger.error(f"User Role Update Error {user_id}: {e}")
+        logger.error(f"Failed to update role for user id={user_id}: {e}")
+        return False
+
+
+async def update_user_name(db_path: str, user_id: int, new_full_name: str) -> bool:
+    """Оновлює ПІБ користувача за його внутрішнім id."""
+    query = "UPDATE users SET full_name = ? WHERE id = ?"
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute(query, (new_full_name, user_id))
+            await db.commit()
+            return cursor.rowcount > 0
+    except Exception as e:
+        logger.error(f"Failed to update full name for user id={user_id}: {e}")
         return False
 
 
@@ -80,155 +127,41 @@ async def update_user_team(db_path: str, user_id: int, new_team: str) -> bool:
             await db.commit()
             return cursor.rowcount > 0
     except Exception as e:
-        logger.error(f"Помилка оновлення відділу користувача id={user_id}: {e}")
+        logger.error(f"Failed to update team for user id={user_id}: {e}")
         return False
 
 
-async def record_checkin(
-    db_path: str, trip_id: int, actor_user_id: int, note: str | None = None
-) -> str | None:
+async def delete_user(db_path: str, user_id: int) -> bool:
     """
-    Фіксує чекін для поїздки, скидає прапорці очікування запиту від оператора
-    та записує подію в checkin_events.
-    Повертає тип події ('SELF_CHECKIN' або 'REQUESTED_CHECKIN') або None, якщо поїздка вже закрита.
+    Безпечно видаляє користувача з БД у межах однієї транзакції:
+    очищає посилання в історії поїздок/чекінів (щоб не порушити FOREIGN KEY)
+    та видаляє запис із таблиці users.
     """
     try:
         async with aiosqlite.connect(db_path) as db:
             await db.execute("PRAGMA foreign_keys = ON;")
-            db.row_factory = aiosqlite.Row
-            # Перевіряємо, чи поїздка активна і чи висів запит від оператора
-            async with db.execute(
-                "SELECT status, pending_request_sent_at FROM trips WHERE id = ?",
-                (trip_id,)
-            ) as cursor:
-                row = await cursor.fetchone()
-                if not row or row["status"] != "ACTIVE":
-                    return None
-                event_type = "REQUESTED_CHECKIN" if row["pending_request_sent_at"] else "SELF_CHECKIN"
-            # Оновлюємо таймер поїздки та очищаємо нагадування/пінги
-            await db.execute(
-                '''
-                UPDATE trips
-                SET last_checkin_at = CURRENT_TIMESTAMP,
-                    last_checkin_by = ?,
-                    operator_reminded_at = NULL,
-                    pending_request_sent_at = NULL,
-                    pending_request_by = NULL
-                WHERE id = ?
-                ''',
-                (actor_user_id, trip_id)
-            )
-            # Додаємо запис в аудит-лог
-            await db.execute(
-                '''INSERT INTO checkin_events (trip_id, actor_user_id, event_type, note)
-                VALUES (?, ?, ?, ?)''',
-                (trip_id, actor_user_id, event_type, note)
-            )
+            # Обнуляємо посилання в історичних таблицях (зберігаючи самі записи поїздок)
+            await db.execute("UPDATE trips SET last_checkin_by = NULL WHERE last_checkin_by = ?", (user_id,))
+            await db.execute("UPDATE trips SET pending_request_by = NULL WHERE pending_request_by = ?", (user_id,))
+            await db.execute("UPDATE checkin_events SET actor_user_id = NULL WHERE actor_user_id = ?", (user_id,))
+            # Видаляємо участь у поїздках та сам профіль
+            await db.execute("DELETE FROM trip_participants WHERE user_id = ?", (user_id,))
+            cursor = await db.execute("DELETE FROM users WHERE id = ?", (user_id,))
             await db.commit()
-            return event_type
+            return cursor.rowcount > 0
     except Exception as e:
-        logger.error(f"Error recording a check-in for a trip #{trip_id}: {e}")
-        return None
-
-
-async def close_trip(db_path: str, trip_id: int, actor_user_id: int) -> bool:
-    '''Переводить активну поїздку в статус COMPLETED та фіксує подію в логах.'''
-    try:
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA foreign_keys = ON;")
-            cursor = await db.execute(
-                '''UPDATE trips
-                SET status = 'COMPLETED',
-                    ended_at = CURRENT_TIMESTAMP,
-                    last_checkin_at = CURRENT_TIMESTAMP,
-                    last_checkin_by = ?,
-                    operator_reminded_at = NULL,
-                    pending_request_sent_at = NULL,
-                    pending_request_by = NULL
-                WHERE id = ? AND status = 'ACTIVE' ''',
-                (actor_user_id, trip_id)
-            )
-            if cursor.rowcount == 0:
-                return False
-            await db.execute(
-                '''
-                INSERT INTO checkin_events (trip_id, actor_user_id, event_type, note)
-                VALUES (?, ?, 'TRIP_CLOSED', 'Екіпаж прибув у пункт призначення')
-                ''',
-                (trip_id, actor_user_id)
-            )
-            await db.commit()
-            return True
-    except Exception as e:
-        logger.error(f"Error closing the trip #{trip_id}: {e}")
+        logger.error(f"Failed to delete user id={user_id}: {e}")
         return False
 
 
-async def get_operators_tg_ids(db_path: str) -> list[int]:
-    '''Повертає Telegram ID усіх операторів та адмінів (використовується, якщо не задано груповий чат).'''
-    query = "SELECT tg_id FROM users WHERE role IN ('OPERATOR', 'ADMIN')"
-    try:
-        async with aiosqlite.connect(db_path) as db:
-            async with db.execute(query) as cursor:
-                rows = await cursor.fetchall()
-                return [r[0] for r in rows]
-    except Exception as e:
-        logger.error(f"Error getting list of operators: {e}")
-        return []
+# =====================================================================
+# ПОЇЗДКИ ТА ЧЕКІНИ
+# =====================================================================
 
-
-async def create_trip(
-    db_path: str, origin: str, destination: str, creator_user_id: int,
-    companion_ids: list[int], planned_start_utc: str, interval_min: int = 120
-) -> int | None:
-    '''
-    Створює поїздку зі статусом 'PLANNED' та часом виїзду planned_start_utc (у форматі UTC).
-    Ініціатор (creator_user_id) автоматично стає старшим групи (is_leader = 1).
-    '''
-    route_code = f"{origin} → {destination}"
-    try:
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA foreign_keys = ON;")
-            # 1. Створюємо заплановану поїздку
-            cursor = await db.execute(
-                '''
-                INSERT INTO trips (
-                    route_code, origin, destination, status,
-                    checkin_interval_min, started_at, last_checkin_at, last_checkin_by
-                )
-                VALUES (?, ?, ?, 'PLANNED', ?, ?, ?, ?)
-                ''',
-                (route_code, origin, destination, interval_min, planned_start_utc, planned_start_utc, creator_user_id)
-            )
-            trip_id = cursor.lastrowid
-            # 2. Формуємо екіпаж
-            participants_data = [(trip_id, creator_user_id, 1)]
-            for uid in companion_ids:
-                if uid != creator_user_id:
-                    participants_data.append((trip_id, uid, 0))
-            await db.executemany(
-                "INSERT INTO trip_participants (trip_id, user_id, is_leader) VALUES (?, ?, ?)",
-                participants_data
-            )
-            # 3. Записуємо створення в аудит-лог
-            await db.execute(
-                """
-                INSERT INTO checkin_events (trip_id, actor_user_id, event_type, note)
-                VALUES (?, ?, 'TRIP_PLANNED', ?)
-                """,
-                (trip_id, creator_user_id, f"Scheduled Departure (UTC): {planned_start_utc}")
-            )
-            await db.commit()
-            return trip_id
-    except Exception as e:
-        logger.error(f"Error creating a trip {route_code}: {e}")
-        return None
-
-
-async def get_trip_details(db_path: str, trip_id: int) -> dict | None:
-    """Повертає деталі поїздки (PLANNED або ACTIVE) разом зі складом екіпажу та останньою локацією."""
+async def _fetch_trip_details(db: aiosqlite.Connection, trip_id: int) -> dict | None:
+    """Внутрішній хелпер: завантажує деталі поїздки й екіпаж, перевикористовуючи відкрите з'єднання."""
     trip_query = """
-    SELECT 
+    SELECT
         t.id, t.route_code, t.origin, t.destination, t.status,
         t.checkin_interval_min, t.started_at, t.last_checkin_at,
         t.pending_request_sent_at,
@@ -254,58 +187,118 @@ async def get_trip_details(db_path: str, trip_id: int) -> dict | None:
     WHERE tp.trip_id = ?
     ORDER BY tp.is_leader DESC, u.full_name ASC
     """
+    async with db.execute(trip_query, (trip_id,)) as cursor:
+        trip_row = await cursor.fetchone()
+        if not trip_row:
+            return None
+        trip = dict(trip_row)
+
+    async with db.execute(crew_query, (trip_id,)) as cursor:
+        crew_rows = await cursor.fetchall()
+        trip["crew"] = [dict(r) for r in crew_rows]
+
+    return trip
+
+
+async def create_trip(
+    db_path: str,
+    origin: str,
+    destination: str,
+    creator_user_id: int,
+    companion_ids: list[int],
+    planned_start_utc: str,
+    interval_min: int = 120
+) -> int | None:
+    """
+    Створює поїздку зі статусом 'PLANNED' та часом виїзду planned_start_utc (у форматі UTC).
+    Ініціатор (creator_user_id) автоматично стає старшим групи (is_leader = 1).
+    """
+    route_code = f"{origin} → {destination}"
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON;")
+            # Створюємо заплановану поїздку
+            cursor = await db.execute(
+                """
+                INSERT INTO trips (
+                    route_code, origin, destination, status,
+                    checkin_interval_min, started_at, last_checkin_at, last_checkin_by
+                )
+                VALUES (?, ?, ?, 'PLANNED', ?, ?, ?, ?)
+                """,
+                (route_code, origin, destination, interval_min, planned_start_utc, planned_start_utc, creator_user_id)
+            )
+            trip_id = cursor.lastrowid
+            # Формуємо екіпаж без дублікатів
+            unique_companions = [uid for uid in dict.fromkeys(companion_ids) if uid != creator_user_id]
+            participants_data = [(trip_id, creator_user_id, 1)] + [
+                (trip_id, uid, 0) for uid in unique_companions
+            ]
+            await db.executemany(
+                "INSERT INTO trip_participants (trip_id, user_id, is_leader) VALUES (?, ?, ?)",
+                participants_data
+            )
+            # Записуємо створення в аудит-лог
+            await db.execute(
+                """
+                INSERT INTO checkin_events (trip_id, actor_user_id, event_type, note)
+                VALUES (?, ?, 'TRIP_PLANNED', ?)
+                """,
+                (trip_id, creator_user_id, f"Scheduled departure (UTC): {planned_start_utc}")
+            )
+            await db.commit()
+            return trip_id
+    except Exception as e:
+        logger.error(f"Failed to create trip '{route_code}': {e}")
+        return None
+
+
+async def get_trip_details(db_path: str, trip_id: int) -> dict | None:
+    """Повертає деталі поїздки (PLANNED або ACTIVE) разом зі складом екіпажу та останньою локацією."""
     try:
         async with aiosqlite.connect(db_path) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute(trip_query, (trip_id,)) as cursor:
-                trip_row = await cursor.fetchone()
-                if not trip_row:
-                    return None
-                trip = dict(trip_row)
-            async with db.execute(crew_query, (trip_id,)) as cursor:
-                crew_rows = await cursor.fetchall()
-                trip["crew"] = [dict(r) for r in crew_rows]
-            return trip
+            return await _fetch_trip_details(db, trip_id)
     except Exception as e:
-        logger.error(f"Error getting trip details #{trip_id}: {e}")
+        logger.error(f"Failed to get details for trip #{trip_id}: {e}")
         return None
 
 
 async def get_user_active_trips(db_path: str, user_id: int) -> list[dict]:
-    '''Повертає всі поточні поїздки користувача (як ACTIVE, так і PLANNED).'''
-    query = '''
+    """Повертає всі поточні поїздки користувача (як ACTIVE, так і PLANNED)."""
+    query = """
     SELECT t.id
     FROM trips t
     JOIN trip_participants tp ON t.id = tp.trip_id
     WHERE tp.user_id = ? AND t.status IN ('ACTIVE', 'PLANNED')
-    ORDER BY CASE t.status WHEN 'ACTIVE' THEN 1 ELSE 2 END, t.started_at ASC
-    '''
+    ORDER BY CASE t.status WHEN 'ACTIVE' THEN 1 ELSE 2 END, datetime(t.started_at) ASC
+    """
     try:
         async with aiosqlite.connect(db_path) as db:
+            db.row_factory = aiosqlite.Row
             async with db.execute(query, (user_id,)) as cursor:
-                rows = await cursor.fetchall()
-                trip_ids = [row[0] for row in rows]
-        trips = []
-        for tid in trip_ids:
-            details = await get_trip_details(db_path, tid)
-            if details:
-                trips.append(details)
-        return trips
+                trip_ids = [row["id"] for row in await cursor.fetchall()]
+            trips = []
+            for tid in trip_ids:
+                details = await _fetch_trip_details(db, tid)
+                if details:
+                    trips.append(details)
+            return trips
     except Exception as e:
-        logger.error(f"Error getting user trips {user_id}: {e}")
+        logger.error(f"Failed to fetch active trips for user id={user_id}: {e}")
         return []
 
 
 async def activate_trip(db_path: str, trip_id: int, actor_user_id: int | None = None) -> bool:
-    '''
+    """
     Переводить поїздку зі статусу 'PLANNED' у 'ACTIVE' після підтвердження виїзду,
-    фіксує фактичний час старту та скидає прапорці нагадувань для відліку 120 хв.
-    '''
+    фіксує фактичний час старту та скидає прапорці нагадувань.
+    """
     try:
         async with aiosqlite.connect(db_path) as db:
             await db.execute("PRAGMA foreign_keys = ON;")
             cursor = await db.execute(
-                '''
+                """
                 UPDATE trips
                 SET status = 'ACTIVE',
                     started_at = CURRENT_TIMESTAMP,
@@ -315,12 +308,12 @@ async def activate_trip(db_path: str, trip_id: int, actor_user_id: int | None = 
                     pending_request_sent_at = NULL,
                     pending_request_by = NULL
                 WHERE id = ? AND status = 'PLANNED'
-                ''',
+                """,
                 (actor_user_id, trip_id)
             )
             if cursor.rowcount == 0:
                 return False
-            note = "The start of the trip has been confirmed" if actor_user_id else "Start of the trip"
+            note = "Departure confirmed" if actor_user_id else "Trip started"
             await db.execute(
                 """
                 INSERT INTO checkin_events (trip_id, actor_user_id, event_type, note)
@@ -331,217 +324,67 @@ async def activate_trip(db_path: str, trip_id: int, actor_user_id: int | None = 
             await db.commit()
             return True
     except Exception as e:
-        logger.error(f"Trip Activation Error #{trip_id}: {e}")
+        logger.error(f"Failed to activate trip #{trip_id}: {e}")
         return False
 
 
-async def cancel_planned_trip(db_path: str, trip_id: int, actor_user_id: int) -> bool:
-    '''Скасовує заплановану поїздку (до її початку).'''
+async def record_checkin(
+    db_path: str, trip_id: int, actor_user_id: int, note: str | None = None
+) -> str | None:
+    """
+    Фіксує чекін для поїздки, скидає прапорці очікування запиту від оператора
+    та записує подію в checkin_events.
+    Повертає тип події ('SELF_CHECKIN' або 'REQUESTED_CHECKIN') або None, якщо поїздка вже закрита.
+    """
     try:
         async with aiosqlite.connect(db_path) as db:
             await db.execute("PRAGMA foreign_keys = ON;")
-            cursor = await db.execute(
-                '''
-                UPDATE trips
-                SET status = 'CANCELLED', ended_at = CURRENT_TIMESTAMP
-                WHERE id = ? AND status = 'PLANNED'
-                ''',
+            db.row_factory = aiosqlite.Row
+            # Перевіряємо, чи поїздка активна і чи висів запит від оператора
+            async with db.execute(
+                "SELECT status, pending_request_sent_at FROM trips WHERE id = ?",
                 (trip_id,)
-            )
-            if cursor.rowcount == 0:
-                return False
-            await db.execute(
-                '''
-                INSERT INTO checkin_events (trip_id, actor_user_id, event_type, note)
-                VALUES (?, ?, 'TRIP_CANCELLED', 'Скасовано працівником до виїзду')
-                ''',
-                (trip_id, actor_user_id)
-            )
-            await db.commit()
-            return True
-    except Exception as e:
-        logger.error(f"Trip Cancellation Error #{trip_id}: {e}")
-        return False
-
-
-async def get_due_planned_trips(db_path: str) -> list[int]:
-    """
-    Повертає ID запланованих поїздок, 
-    у яких настав час відправлення (started_at <= UTC now)
-    """
-    query = """
-    SELECT id FROM trips
-    WHERE status = 'PLANNED'
-      AND datetime(started_at) <= datetime('now')
-      AND operator_reminded_at IS NULL
-    """
-    try:
-        async with aiosqlite.connect(db_path) as db:
-            async with db.execute(query) as cursor:
-                rows = await cursor.fetchall()
-                return [r[0] for r in rows]
-    except Exception as e:
-        logger.error(f"Error searching for scheduled trips for reminders: {e}")
-        return []
-
-
-async def mark_operator_ping_sent(db_path: str, trip_id: int, operator_user_id: int) -> bool:
-    '''Фіксує в БД, що оператор надіслав запит на чекін екіпажу.'''
-    try:
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA foreign_keys = ON;")
+            ) as cursor:
+                row = await cursor.fetchone()
+                if not row or row["status"] != "ACTIVE":
+                    return None
+                event_type = "REQUESTED_CHECKIN" if row["pending_request_sent_at"] else "SELF_CHECKIN"
+            # Оновлюємо таймер поїздки та очищаємо нагадування/пінги (із захистом від race condition)
             cursor = await db.execute(
                 """
                 UPDATE trips
-                SET pending_request_sent_at = CURRENT_TIMESTAMP,
-                    pending_request_by = ?
+                SET last_checkin_at = CURRENT_TIMESTAMP,
+                    last_checkin_by = ?,
+                    operator_reminded_at = NULL,
+                    pending_request_sent_at = NULL,
+                    pending_request_by = NULL
                 WHERE id = ? AND status = 'ACTIVE'
                 """,
-                (operator_user_id, trip_id)
+                (actor_user_id, trip_id)
             )
             if cursor.rowcount == 0:
-                return False
+                return None
+            # Додаємо запис в аудит-лог
             await db.execute(
-                '''
+                """
                 INSERT INTO checkin_events (trip_id, actor_user_id, event_type, note)
-                VALUES (?, ?, 'OPERATOR_PING_SENT', 'Запит на чекін від моніторингу')
-                ''',
-                (trip_id, operator_user_id)
+                VALUES (?, ?, ?, ?)
+                """,
+                (trip_id, actor_user_id, event_type, note)
             )
             await db.commit()
-            return True
+            return event_type
     except Exception as e:
-        logger.error(f"Error recording the operator's request for a trip#{trip_id}: {e}")
-        return False
-
-
-async def get_all_monitored_trips(db_path: str) -> list[dict]:
-    '''
-    Повертає всі поїздки зі статусом ACTIVE та PLANNED для дашборду моніторингу.
-    Сортування:
-    1. Спочатку ACTIVE (найбільш прострочені — зверху: last_checkin_at ASC).
-    2. Потім PLANNED (найближчі за часом виїзду — зверху: started_at ASC).
-    '''
-    query = '''
-    SELECT id
-    FROM trips
-    WHERE status IN ('ACTIVE', 'PLANNED')
-    ORDER BY 
-        CASE status WHEN 'ACTIVE' THEN 1 ELSE 2 END ASC,
-        CASE WHEN status = 'ACTIVE' THEN datetime(last_checkin_at) END ASC,
-        CASE WHEN status = 'PLANNED' THEN datetime(started_at) END ASC
-    '''
-    try:
-        async with aiosqlite.connect(db_path) as db:
-            async with db.execute(query) as cursor:
-                rows = await cursor.fetchall()
-                trip_ids = [r[0] for r in rows]
-        trips = []
-        for tid in trip_ids:
-            details = await get_trip_details(db_path, tid)
-            if details:
-                trips.append(details)
-        return trips
-    except Exception as e:
-        logger.error(f"Error getting the list of trips for monitoring: {e}")
-        return []
-
-
-async def get_overdue_active_trips(db_path: str) -> list[int]:
-    """
-    Повертає ID активних поїздок, де задано періодичний інтервал (> 0),
-    минуло >= checkin_interval_min з останнього чекіну,
-    і алерт ще не надсилався (operator_reminded_at IS NULL).
-    """
-    query = """
-    SELECT id FROM trips
-    WHERE status = 'ACTIVE'
-      AND checkin_interval_min > 0
-      AND CAST((julianday('now') - julianday(last_checkin_at)) * 1440 AS INTEGER) >= checkin_interval_min
-      AND operator_reminded_at IS NULL
-    """
-    try:
-        async with aiosqlite.connect(db_path) as db:
-            async with db.execute(query) as cursor:
-                rows = await cursor.fetchall()
-                return [r[0] for r in rows]
-    except Exception as e:
-        logger.error(f"Error searching for overdue active trips: {e}")
-        return []
-
-
-async def mark_trip_reminded(db_path: str, trip_id: int) -> bool:
-    """
-    Ставить мітку часу operator_reminded_at = CURRENT_TIMESTAMP,
-    щоб Watchdog не спамив повторними сповіщеннями кожні 30 секунд.
-    """
-    query = "UPDATE trips SET operator_reminded_at = CURRENT_TIMESTAMP WHERE id = ?"
-    try:
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute(query, (trip_id,))
-            await db.commit()
-            return True
-    except Exception as e:
-        logger.error(f"Error updating operator_reminded_at for a trip#{trip_id}: {e}")
-        return False
-
-
-async def get_user_by_id(db_path: str, user_id: int) -> dict | None:
-    """Повертає профіль користувача за його внутрішнім id у таблиці users."""
-    query = "SELECT id, tg_id, full_name, team, role FROM users WHERE id = ?"
-    try:
-        async with aiosqlite.connect(db_path) as db:
-            db.row_factory = aiosqlite.Row
-            async with db.execute(query, (user_id,)) as cursor:
-                row = await cursor.fetchone()
-                return dict(row) if row else None
-    except Exception as e:
-        logger.error(f"Помилка отримання користувача id={user_id}: {e}")
+        logger.error(f"Failed to record check-in for trip #{trip_id}: {e}")
         return None
-
-
-async def update_user_name(db_path: str, user_id: int, new_full_name: str) -> bool:
-    """Оновлює ПІБ користувача за його внутрішнім id."""
-    query = "UPDATE users SET full_name = ? WHERE id = ?"
-    try:
-        async with aiosqlite.connect(db_path) as db:
-            cursor = await db.execute(query, (new_full_name, user_id))
-            await db.commit()
-            return cursor.rowcount > 0
-    except Exception as e:
-        logger.error(f"User Name Update Error id={user_id}: {e}")
-        return False
-
-
-async def delete_user(db_path: str, user_id: int) -> bool:
-    """
-    Безпечно видаляє користувача з БД у межах однієї транзакції:
-    очищає посилання в історії поїздок/чекінів (щоб не порушити FOREIGN KEY)
-    та видаляє запис із таблиці users.
-    """
-    try:
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute("PRAGMA foreign_keys = ON;")
-            # Обнуляємо посилання в історичних таблицях (зберігаючи самі записи поїздок)
-            await db.execute("UPDATE trips SET last_checkin_by = NULL WHERE last_checkin_by = ?", (user_id,))
-            await db.execute("UPDATE trips SET pending_request_by = NULL WHERE pending_request_by = ?", (user_id,))
-            await db.execute("UPDATE checkin_events SET actor_user_id = NULL WHERE actor_user_id = ?", (user_id,))
-            # Видаляємо участь у поїздках та сам профіль
-            await db.execute("DELETE FROM trip_participants WHERE user_id = ?", (user_id,))
-            cursor = await db.execute("DELETE FROM users WHERE id = ?", (user_id,))
-            await db.commit()
-            return cursor.rowcount > 0
-    except Exception as e:
-        logger.error(f"User Deletion Error id={user_id}: {e}")
-        return False
 
 
 async def record_help_request(
     db_path: str, trip_id: int, actor_user_id: int, note: str | None = None
 ) -> bool:
     """
-    Записує подію 'HELP_REQUESTED' в аудит-лог checkin_events
-    та оновлює час останнього зв'язку з групою.
+    Записує подію 'HELP_REQUESTED' в аудит-лог checkin_events,
+    оновлює час останнього зв'язку та скидає прапорці нагадувань Watchdog.
     """
     try:
         async with aiosqlite.connect(db_path) as db:
@@ -550,7 +393,10 @@ async def record_help_request(
                 """
                 UPDATE trips
                 SET last_checkin_at = CURRENT_TIMESTAMP,
-                    last_checkin_by = ?
+                    last_checkin_by = ?,
+                    operator_reminded_at = NULL,
+                    pending_request_sent_at = NULL,
+                    pending_request_by = NULL
                 WHERE id = ? AND status = 'ACTIVE'
                 """,
                 (actor_user_id, trip_id)
@@ -567,7 +413,7 @@ async def record_help_request(
             await db.commit()
             return True
     except Exception as e:
-        logger.error(f"Error recording HELP_REQUESTED for the trip #{trip_id}: {e}")
+        logger.error(f"Failed to record HELP_REQUESTED for trip #{trip_id}: {e}")
         return False
 
 
@@ -604,4 +450,214 @@ async def update_trip_interval(
             return True
     except Exception as e:
         logger.error(f"Failed to update check-in interval for trip #{trip_id}: {e}")
+        return False
+
+
+async def close_trip(db_path: str, trip_id: int, actor_user_id: int) -> bool:
+    """Переводить активну поїздку в статус COMPLETED та фіксує подію в логах."""
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON;")
+            cursor = await db.execute(
+                """
+                UPDATE trips
+                SET status = 'COMPLETED',
+                    ended_at = CURRENT_TIMESTAMP,
+                    last_checkin_at = CURRENT_TIMESTAMP,
+                    last_checkin_by = ?,
+                    operator_reminded_at = NULL,
+                    pending_request_sent_at = NULL,
+                    pending_request_by = NULL
+                WHERE id = ? AND status = 'ACTIVE'
+                """,
+                (actor_user_id, trip_id)
+            )
+            if cursor.rowcount == 0:
+                return False
+            await db.execute(
+                """
+                INSERT INTO checkin_events (trip_id, actor_user_id, event_type, note)
+                VALUES (?, ?, 'TRIP_CLOSED', 'Crew arrived at destination')
+                """,
+                (trip_id, actor_user_id)
+            )
+            await db.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Failed to close trip #{trip_id}: {e}")
+        return False
+
+
+async def cancel_planned_trip(db_path: str, trip_id: int, actor_user_id: int) -> bool:
+    """Скасовує заплановану поїздку (до її початку)."""
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON;")
+            cursor = await db.execute(
+                """
+                UPDATE trips
+                SET status = 'CANCELLED', ended_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND status = 'PLANNED'
+                """,
+                (trip_id,)
+            )
+            if cursor.rowcount == 0:
+                return False
+            await db.execute(
+                """
+                INSERT INTO checkin_events (trip_id, actor_user_id, event_type, note)
+                VALUES (?, ?, 'TRIP_CANCELLED', 'Cancelled before departure')
+                """,
+                (trip_id, actor_user_id)
+            )
+            await db.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Failed to cancel planned trip #{trip_id}: {e}")
+        return False
+
+
+# =====================================================================
+# МОНІТОРИНГ ТА WATCHDOG
+# =====================================================================
+
+async def get_all_monitored_trips(db_path: str) -> list[dict]:
+    """
+    Повертає всі поїздки зі статусом ACTIVE та PLANNED для дашборду моніторингу.
+    Сортування:
+    1. ACTIVE із періодичним чекіном (> 0) — за найближчим/простроченим дедлайном зверху.
+    2. ACTIVE у режимі Start / Finish only (0) — спочатку ті, де висить пінг, далі за часом старту.
+    3. PLANNED — за найближчим плановим часом виїзду.
+    """
+    query = """
+    SELECT id
+    FROM trips
+    WHERE status IN ('ACTIVE', 'PLANNED')
+    ORDER BY
+        CASE
+            WHEN status = 'ACTIVE' AND checkin_interval_min > 0 THEN 1
+            WHEN status = 'ACTIVE' THEN 2
+            ELSE 3
+        END ASC,
+        CASE
+            WHEN status = 'ACTIVE' AND checkin_interval_min > 0
+            THEN julianday(last_checkin_at) + (checkin_interval_min / 1440.0)
+        END ASC,
+        CASE
+            WHEN status = 'ACTIVE' AND checkin_interval_min <= 0
+            THEN (CASE WHEN pending_request_sent_at IS NOT NULL THEN 0 ELSE 1 END)
+        END ASC,
+        CASE
+            WHEN status = 'ACTIVE' AND checkin_interval_min <= 0
+            THEN datetime(started_at)
+        END ASC,
+        CASE
+            WHEN status = 'PLANNED'
+            THEN datetime(started_at)
+        END ASC
+    """
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query) as cursor:
+                trip_ids = [row["id"] for row in await cursor.fetchall()]
+
+            trips = []
+            for tid in trip_ids:
+                details = await _fetch_trip_details(db, tid)
+                if details:
+                    trips.append(details)
+            return trips
+    except Exception as e:
+        logger.error(f"Failed to fetch monitored trips list: {e}")
+        return []
+
+
+async def get_due_planned_trips(db_path: str) -> list[int]:
+    """
+    Повертає ID запланованих поїздок,
+    у яких настав час відправлення (started_at <= UTC now) і нагадування ще не надсилалось.
+    """
+    query = """
+    SELECT id FROM trips
+    WHERE status = 'PLANNED'
+      AND datetime(started_at) <= datetime('now')
+      AND operator_reminded_at IS NULL
+    """
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            async with db.execute(query) as cursor:
+                rows = await cursor.fetchall()
+                return [r[0] for r in rows]
+    except Exception as e:
+        logger.error(f"Failed to fetch due planned trips: {e}")
+        return []
+
+
+async def get_overdue_active_trips(db_path: str) -> list[int]:
+    """
+    Повертає ID активних поїздок, де задано періодичний інтервал (> 0),
+    минуло >= checkin_interval_min з останнього чекіну,
+    і алерт ще не надсилався (operator_reminded_at IS NULL).
+    """
+    query = """
+    SELECT id FROM trips
+    WHERE status = 'ACTIVE'
+      AND checkin_interval_min > 0
+      AND CAST((julianday('now') - julianday(last_checkin_at)) * 1440 AS INTEGER) >= checkin_interval_min
+      AND operator_reminded_at IS NULL
+    """
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            async with db.execute(query) as cursor:
+                rows = await cursor.fetchall()
+                return [r[0] for r in rows]
+    except Exception as e:
+        logger.error(f"Failed to fetch overdue active trips: {e}")
+        return []
+
+
+async def mark_trip_reminded(db_path: str, trip_id: int) -> bool:
+    """
+    Ставить мітку часу operator_reminded_at = CURRENT_TIMESTAMP,
+    щоб Watchdog не спамив повторними сповіщеннями кожні 30 секунд.
+    """
+    query = "UPDATE trips SET operator_reminded_at = CURRENT_TIMESTAMP WHERE id = ?"
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute(query, (trip_id,))
+            await db.commit()
+            return cursor.rowcount > 0
+    except Exception as e:
+        logger.error(f"Failed to update operator_reminded_at for trip #{trip_id}: {e}")
+        return False
+
+
+async def mark_operator_ping_sent(db_path: str, trip_id: int, operator_user_id: int) -> bool:
+    """Фіксує в БД, що оператор надіслав запит на чекін екіпажу."""
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON;")
+            cursor = await db.execute(
+                """
+                UPDATE trips
+                SET pending_request_sent_at = CURRENT_TIMESTAMP,
+                    pending_request_by = ?
+                WHERE id = ? AND status = 'ACTIVE'
+                """,
+                (operator_user_id, trip_id)
+            )
+            if cursor.rowcount == 0:
+                return False
+            await db.execute(
+                """
+                INSERT INTO checkin_events (trip_id, actor_user_id, event_type, note)
+                VALUES (?, ?, 'OPERATOR_PING_SENT', 'Check-in request sent by monitoring')
+                """,
+                (trip_id, operator_user_id)
+            )
+            await db.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Failed to record operator check-in ping for trip #{trip_id}: {e}")
         return False
