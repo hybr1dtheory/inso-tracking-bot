@@ -70,20 +70,20 @@ async def check_planned_departures(bot: Bot):
 
 async def check_overdue_checkins(bot: Bot):
     """
-    Перевіряє активні поїздки, де минуло 120+ хвилин (checkin_interval_min) з останнього чекіну.
-    Надсилає алерт у групу моніторингу та нагадування екіпажу.
+    Перевіряє активні поїздки з інтервалом > 0, де минуло >= checkin_interval_min
+    з останнього чекіну. Надсилає алерт у групу моніторингу та нагадування екіпажу.
     """
     overdue_trip_ids = await get_overdue_active_trips(DB_PATH)
     for trip_id in overdue_trip_ids:
         trip = await get_trip_details(DB_PATH, trip_id)
-        if not trip or trip["status"] != "ACTIVE":
+        if not trip or trip["status"] != "ACTIVE" or trip["checkin_interval_min"] <= 0:
             continue
         # Фіксуємо, що алерт по поточному 120-хвилинному циклу надіслано
         await mark_trip_reminded(DB_PATH, trip_id)
         crew_names = format_crew_list(trip["crew"])
         mins = max(0, trip["minutes_ago"] or 0)
         last_by = trip["last_checkin_user_name"] or "Trip start"
-        # 1. Червоний алерт у групу моніторингу з кнопкою запиту на чекін
+        # Червоний алерт у групу моніторингу з кнопкою запиту на чекін
         await notify_monitoring(
             bot,
             text=(
@@ -95,7 +95,7 @@ async def check_overdue_checkins(bot: Bot):
                 "Go to the bot to send a check-in request"
             )
         )
-        # 2. Автоматичне нагадування подорожуючим
+        # Автоматичне нагадування подорожуючим
         for member in trip["crew"]:
             try:
                 await bot.send_message(
@@ -121,5 +121,4 @@ async def watchdog_loop(bot: Bot):
             await check_overdue_checkins(bot)
         except Exception as e:
             logger.error(f"Watchdog loop error: {e}")
-
         await asyncio.sleep(30)

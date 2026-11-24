@@ -27,7 +27,8 @@ from keyboards.inline import (
     build_traveler_trip_keyboard,
     build_close_confirm_keyboard,
     build_cancel_note_keyboard,
-    build_help_comment_keyboard
+    build_help_comment_keyboard,
+    build_interval_selection_keyboard
 )
 
 
@@ -39,6 +40,7 @@ class NewTripFSM(StatesGroup):
     waiting_for_origin = State()
     waiting_for_destination = State()
     waiting_for_departure_time = State()
+    waiting_for_interval = State()
     waiting_for_companions = State()
 
 
@@ -127,6 +129,13 @@ def format_crew_list(crew: list[dict]) -> str:
     return "\n".join(formatted)
 
 
+def format_interval(interval_min: int) -> str:
+    """Перетворює числовий інтервал у текстове представлення для інтерфейсу."""
+    if interval_min <= 0:
+        return "Start / Finish only"
+    return f"every {interval_min} min"
+
+
 def format_trip_card(trip: dict) -> str:
     """Формує картку поїздки залежно від її статусу (PLANNED або ACTIVE)."""
     crew_names = format_crew_list(trip["crew"])
@@ -137,7 +146,7 @@ def format_trip_card(trip: dict) -> str:
             f"📍 Route: <b>{trip['origin']} → {trip['destination']}</b>\n"
             f"👥 Crew: \n{crew_names}\n"
             f"🕒 Departure: <b>{dep_str}</b>\n"
-            f"⏱ Check-in interval: <b>{trip['checkin_interval_min']} min</b>\n\n"
+            f"⏱ Check-in interval: <b>{format_interval(trip['checkin_interval_min'])}</b>\n"
             "<i>Monitoring will begin after you confirm departure using the button below.</i>"
         )
     minutes_ago = max(0, trip["minutes_ago"] or 0)
@@ -154,7 +163,7 @@ def format_trip_card(trip: dict) -> str:
         f"🚗 <b>Active trip #{trip['id']}</b>\n"
         f"📍 Route: <b>{trip['origin']} → {trip['destination']}</b>\n"
         f"👥 Crew: \n{crew_names}\n"
-        f"⏱ Check-in interval: every <b>{trip['checkin_interval_min']} min</b>\n"
+        f"⏱ Check-in interval: <b>{format_interval(trip['checkin_interval_min'])}</b>\n"
         f"🕒 Last check-in: <b>{minutes_ago} min ago</b> ({last_by})"
         f"{location_line}"
         f"{ping_warning}"
@@ -212,7 +221,7 @@ async def cmd_new_trip(message: Message, db_user: dict | None, state: FSMContext
     await state.clear()
     await message.answer(
         "🚗 <b>New Trip Setup</b>\n\n"
-        "Step 1/4. Enter the <b>point of departure</b> (e.g., <i>Kyiv</i>):",
+        "Step 1/5. Enter the <b>point of departure</b> (e.g., <i>Kyiv</i>):",
         reply_markup=build_cancel_creation_keyboard()
     )
     await state.set_state(NewTripFSM.waiting_for_origin)
@@ -260,7 +269,7 @@ async def process_origin(message: Message, state: FSMContext):
     await state.update_data(origin=origin)
     await message.answer(
         f"Departure: <b>{origin}</b>\n\n"
-        "Step 2/4. Enter the <b>destination</b> (e.g., <i>Dnipro</i>):",
+        "Step 2/5. Enter the <b>destination</b> (e.g., <i>Dnipro</i>):",
         reply_markup=build_cancel_creation_keyboard()
     )
     await state.set_state(NewTripFSM.waiting_for_destination)
@@ -273,7 +282,7 @@ async def process_destination(message: Message, state: FSMContext):
     now_str = datetime.now(KYIV_TZ).strftime("%d.%m %H:%M")
     await message.answer(
         f"Route: <b>{(await state.get_data())['origin']} → {destination}</b>\n\n"
-        "Step 3/4. Enter the <b>departure time</b> (Kyiv time):\n"
+        "Step 3/5. Enter the <b>departure time</b> (Kyiv time):\n"
         "• Format <code>HH:MM</code> (e.g., <code>09:30</code>) — for today/tomorrow\n"
         f"• Format <code>DD.MM HH:MM</code> (e.g., <code>{now_str}</code>) — for a specific date",
         reply_markup=build_cancel_creation_keyboard()
@@ -290,18 +299,37 @@ async def process_departure_time(message: Message, db_user: dict, state: FSMCont
             reply_markup=build_cancel_creation_keyboard()
         )
         return
+    await state.update_data(
+        planned_start_utc=dt_utc.strftime("%Y-%m-%d %H:%M:%S"),
+        kyiv_departure_label=kyiv_label
+    )
+    await message.answer(
+        f"🕒 Departure time: <b>{kyiv_label}</b>\n\n"
+        "Step 4/5. Select the <b>check-in interval</b> according to the route risk level:",
+        reply_markup=build_interval_selection_keyboard(
+            callback_prefix="trip_set_interval",
+            cancel_callback="trip_create_cancel",
+            cancel_text="❌ Cancel creation"
+        )
+    )
+    await state.set_state(NewTripFSM.waiting_for_interval)
+
+
+@traveler_router.callback_query(NewTripFSM.waiting_for_interval, F.data.startswith("trip_set_interval:"))
+async def process_interval_selection(callback: CallbackQuery, db_user: dict, state: FSMContext):
+    await callback.answer()
+    interval_min = int(callback.data.split(":")[1])
     all_users = await get_all_users(DB_PATH)
     other_users = [u for u in all_users if u["id"] != db_user["id"]]
     await state.update_data(
-        planned_start_utc=dt_utc.strftime("%Y-%m-%d %H:%M:%S"),
-        kyiv_departure_label=kyiv_label,
+        checkin_interval_min=interval_min,
         other_users=other_users,
         selected_companion_ids=[],
         comp_page=0
     )
-    await message.answer(
-        f"🕒 Departure time: <b>{kyiv_label}</b>\n\n"
-        f"Step 4/4. You (<b>{db_user['full_name']}</b>) are automatically assigned as the trip leader.\n"
+    await callback.message.edit_text(
+        f"⏱ Check-in interval: <b>{format_interval(interval_min)}</b>\n\n"
+        f"Step 5/5. You (<b>{db_user['full_name']}</b>) are automatically assigned as the trip leader.\n"
         "If traveling solo — tap the top button. If traveling in a group — select your companions:",
         reply_markup=build_companions_keyboard(other_users, [], page=0)
     )
@@ -344,6 +372,7 @@ async def finalize_planned_trip(callback: CallbackQuery, db_user: dict, state: F
     await callback.answer("Trip planned!")
     data = await state.get_data()
     await state.clear()
+    interval_min = data.get("checkin_interval_min", CHECKIN_INTERVAL_MIN)
     trip_id = await create_trip(
         db_path=DB_PATH,
         origin=data["origin"],
@@ -351,7 +380,7 @@ async def finalize_planned_trip(callback: CallbackQuery, db_user: dict, state: F
         creator_user_id=db_user["id"],
         companion_ids=data["selected_companion_ids"],
         planned_start_utc=data["planned_start_utc"],
-        interval_min=CHECKIN_INTERVAL_MIN
+        interval_min=interval_min
     )
     if not trip_id:
         await callback.message.edit_text("❌ Error saving the trip to the database.")
@@ -383,6 +412,7 @@ async def finalize_planned_trip(callback: CallbackQuery, db_user: dict, state: F
             f"📍 Route: <b>{trip['route_code']}</b>\n"
             f"👥 Crew: \n{crew_names}\n"
             f"🕒 Planned departure: <b>{dep_str}</b>\n"
+            f"⏱ Check-in interval: <b>{format_interval(trip['checkin_interval_min'])}</b>\n"
             f"👤 Created by: <b>{db_user['full_name']}</b>"
         )
     )
@@ -413,7 +443,7 @@ async def process_manual_start(callback: CallbackQuery, db_user: dict | None, bo
             f"🚀 <b>TRIP STARTED #{trip_id}</b> ({trip['route_code']})\n"
             f"👥 Crew: \n{crew_names}\n"
             f"▶️ Started by: <b>{db_user['full_name']}</b>\n"
-            f"⏱ Check-in interval (SOP): <b>{trip['checkin_interval_min']} min</b>"
+            f"⏱ Check-in interval: <b>{format_interval(trip['checkin_interval_min'])}</b>"
         )
     )
     await notify_other_crew_members(
@@ -525,12 +555,17 @@ async def process_checkin_note(message: Message, db_user: dict | None, state: FS
         reply_markup=build_traveler_trip_keyboard(trip_id)
     )
     kind_label = "requested by operator" if event_type == "REQUESTED_CHECKIN" else "scheduled"
+    next_check_line = (
+        f"⏱ Next check-in in {trip['checkin_interval_min']} min."
+        if trip["checkin_interval_min"] > 0
+        else "⏱ Mode: <b>Start / Finish only</b>"
+    )
     await notify_monitoring(
         bot,
         f"🟢 <b>CHECK-IN — Trip #{trip_id}</b> ({trip['route_code']})\n"
         f"👤 From: <b>{db_user['full_name']}</b> ({kind_label})\n"
         f"📍 Location / comment: <b>{location_note}</b>\n"
-        f"⏱ Next check-in in {trip['checkin_interval_min']} min."
+        f"{next_check_line}"
     )
     await notify_other_crew_members(
         bot,

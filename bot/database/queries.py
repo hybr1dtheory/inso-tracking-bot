@@ -449,12 +449,14 @@ async def get_all_monitored_trips(db_path: str) -> list[dict]:
 
 async def get_overdue_active_trips(db_path: str) -> list[int]:
     """
-    Повертає ID активних поїздок, де з останнього чекіну минуло >= checkin_interval_min (120 хв),
-    і алерт про це прострочення ще не надсилався (operator_reminded_at IS NULL).
+    Повертає ID активних поїздок, де задано періодичний інтервал (> 0),
+    минуло >= checkin_interval_min з останнього чекіну,
+    і алерт ще не надсилався (operator_reminded_at IS NULL).
     """
     query = """
     SELECT id FROM trips
     WHERE status = 'ACTIVE'
+      AND checkin_interval_min > 0
       AND CAST((julianday('now') - julianday(last_checkin_at)) * 1440 AS INTEGER) >= checkin_interval_min
       AND operator_reminded_at IS NULL
     """
@@ -566,4 +568,40 @@ async def record_help_request(
             return True
     except Exception as e:
         logger.error(f"Error recording HELP_REQUESTED for the trip #{trip_id}: {e}")
+        return False
+
+
+async def update_trip_interval(
+    db_path: str, trip_id: int, new_interval_min: int, actor_user_id: int
+) -> bool:
+    """
+    Змінює інтервал чекіну для запланованої або активної поїздки,
+    скидає прапорець нагадування Watchdog та пише запис в аудит-лог.
+    """
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON;")
+            cursor = await db.execute(
+                """
+                UPDATE trips
+                SET checkin_interval_min = ?,
+                    operator_reminded_at = NULL
+                WHERE id = ? AND status IN ('PLANNED', 'ACTIVE')
+                """,
+                (new_interval_min, trip_id)
+            )
+            if cursor.rowcount == 0:
+                return False
+            label = "Start / Finish only" if new_interval_min == 0 else f"{new_interval_min} min"
+            await db.execute(
+                """
+                INSERT INTO checkin_events (trip_id, actor_user_id, event_type, note)
+                VALUES (?, ?, 'INTERVAL_CHANGED', ?)
+                """,
+                (trip_id, actor_user_id, f"Check-in interval changed to {label}")
+            )
+            await db.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Failed to update check-in interval for trip #{trip_id}: {e}")
         return False

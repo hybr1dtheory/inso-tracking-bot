@@ -105,7 +105,8 @@ def get_trip_status_icon(trip: dict) -> str:
     if trip["status"] == "PLANNED":
         return "📅"
     minutes_ago = max(0, trip["minutes_ago"] or 0)
-    if minutes_ago >= trip["checkin_interval_min"]:
+    interval = trip["checkin_interval_min"]
+    if interval > 0 and minutes_ago >= interval:
         return "🔴"
     if trip["pending_request_sent_at"]:
         return "🟡"
@@ -133,18 +134,18 @@ def build_operator_dashboard_keyboard(trips: list[dict]) -> InlineKeyboardMarkup
 
 
 def build_operator_trip_manage_keyboard(trip: dict) -> InlineKeyboardMarkup:
-    '''Клавіатура керування конкретною поїздкою в режимі перегляду оператора.'''
+    """Клавіатура керування конкретною поїздкою в режимі перегляду оператора."""
     builder = InlineKeyboardBuilder()
     trip_id = trip["id"]
     if trip["status"] == "ACTIVE":
         builder.button(text="📡 Send check-in request", callback_data=f"op_card_ping:{trip_id}")
+        builder.button(text="⏱ Change check-in interval", callback_data=f"op_edit_interval:{trip_id}")
         builder.button(text="🔄 Refresh card", callback_data=f"op_view_trip:{trip_id}")
         builder.button(text="🏁 Force close trip", callback_data=f"op_force_close_ask:{trip_id}")
-        builder.adjust(1, 1, 1)
     elif trip["status"] == "PLANNED":
         builder.button(text="🚀 Start monitoring now", callback_data=f"op_force_start:{trip_id}")
+        builder.button(text="⏱ Change check-in interval", callback_data=f"op_edit_interval:{trip_id}")
         builder.button(text="❌ Cancel planned trip", callback_data=f"op_force_cancel:{trip_id}")
-        builder.adjust(1)
     builder.button(text="⬅️ Back to trips list", callback_data="op_dashboard_refresh")
     builder.adjust(1)
     return builder.as_markup()
@@ -198,6 +199,35 @@ def build_companions_keyboard(
     # Нижня кнопка скасування
     builder.row(
         InlineKeyboardButton(text="❌ Cancel", callback_data="trip_create_cancel")
+    )
+    return builder.as_markup()
+
+
+def build_interval_selection_keyboard(
+    callback_prefix: str, cancel_callback: str,
+    current_interval: int | None = None, cancel_text: str = "❌ Cancel"
+) -> InlineKeyboardMarkup:
+    """
+    Універсальна клавіатура вибору інтервалу чекіну (30, 60, 120 хв або 0 = Start/Finish only).
+    Якщо передано current_interval — позначає поточне значення галочкою (для режиму редагування оператором).
+    """
+    builder = InlineKeyboardBuilder()
+    options = [
+        (30, "🔴 Every 30 min (High risk)"),
+        (60, "🟠 Every 60 min (Elevated risk)"),
+        (120, "🟢 Every 120 min (Standard)"),
+        (0, "⚪️ Start / Finish only")
+    ]
+    for minutes, label in options:
+        mark = "✅ " if current_interval == minutes else ""
+        builder.row(
+            InlineKeyboardButton(
+                text=f"{mark}{label}",
+                callback_data=f"{callback_prefix}:{minutes}"
+            )
+        )
+    builder.row(
+        InlineKeyboardButton(text=cancel_text, callback_data=cancel_callback)
     )
     return builder.as_markup()
 

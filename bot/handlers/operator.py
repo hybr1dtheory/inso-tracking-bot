@@ -12,13 +12,15 @@ from database.queries import (
     mark_operator_ping_sent,
     activate_trip,
     close_trip,
-    cancel_planned_trip
+    cancel_planned_trip,
+    update_trip_interval
 )
 from handlers.traveler import (
     utc_str_to_kyiv_str,
     format_trip_card,
     notify_other_crew_members,
-    notify_monitoring
+    notify_monitoring,
+    format_interval
 )
 from keyboards.inline import (
     get_trip_status_icon,
@@ -26,7 +28,8 @@ from keyboards.inline import (
     build_operator_dashboard_keyboard,
     build_operator_trip_manage_keyboard,
     build_operator_close_confirm_keyboard,
-    build_traveler_trip_keyboard
+    build_traveler_trip_keyboard,
+    build_interval_selection_keyboard
 )
 
 
@@ -66,7 +69,7 @@ def format_dashboard_text(trips: list[dict]) -> str:
                 "Unknown"
             )
             status_note = ""
-            if mins >= t["checkin_interval_min"]:
+            if t["checkin_interval_min"] > 0 and mins >= t["checkin_interval_min"]:
                 status_note = " — ⚠️ <b>CHECK-IN TIME HAS EXPIRED!</b>"
             elif t["pending_request_sent_at"]:
                 status_note = " — ⏳ <i>Waiting for a response</i>"
@@ -112,7 +115,7 @@ def format_operator_trip_details(trip: dict) -> str:
             f"{icon} <b>Trip #{trip['id']} (PLANNED)</b>\n\n"
             f"📍 Route: <b>{trip['origin']} → {trip['destination']}</b>\n"
             f"🕒 Scheduled departure: <b>{dep_str}</b>\n"
-            f"⏱ Check-in period: <b>{trip['checkin_interval_min']} хв</b>\n\n"
+            f"⏱ Check-in interval: <b>{format_interval(trip['checkin_interval_min'])}</b>\n\n"
             f"👥 <b>Group members ({len(trip['crew'])}):</b>\n{crew_block}"
         )
     mins = max(0, trip["minutes_ago"] or 0)
@@ -120,8 +123,8 @@ def format_operator_trip_details(trip: dict) -> str:
     last_time_kyiv = utc_str_to_kyiv_str(trip["last_checkin_at"])
     start_time_kyiv = utc_str_to_kyiv_str(trip["started_at"])
     alert_banner = ""
-    if mins >= trip["checkin_interval_min"]:
-        alert_banner = "\n🔴 <b>ATTENTION: The check-in interval (120 min) has been exceeded! Send a request to the group.</b>\n"
+    if trip["checkin_interval_min"] > 0 and mins >= trip["checkin_interval_min"]:
+        alert_banner = "\n🔴 <b>ATTENTION: The check-in interval has been exceeded! Send a request to the group.</b>\n"
     elif trip["pending_request_sent_at"]:
         ping_time_kyiv = utc_str_to_kyiv_str(trip["pending_request_sent_at"])
         alert_banner = f"\n🟡 <b>Request sent ({ping_time_kyiv}). Awaiting confirmation from the group.</b>\n"
@@ -136,7 +139,7 @@ def format_operator_trip_details(trip: dict) -> str:
         f"🚀 Actual start: <b>{start_time_kyiv}</b>\n"
         f"🕒 Last check-in: <b>{mins} min ago</b> ({last_time_kyiv}, from: {last_by})\n"
         f"{location_str}"
-        f"⏱ Check-in period: every <b>{trip['checkin_interval_min']} min</b>\n\n"
+        f"⏱ Check-in interval: <b>{format_interval(trip['checkin_interval_min'])}</b>\n\n"
         f"👥 <b>Group members ({len(trip['crew'])}):</b>\n{crew_block}"
     )
 
@@ -352,4 +355,93 @@ async def cb_operator_force_close_confirm(callback: CallbackQuery, db_user: dict
     await callback.message.edit_text(
         text=format_dashboard_text(trips),
         reply_markup=build_operator_dashboard_keyboard(trips)
+    )
+
+
+@operator_router.callback_query(F.data.startswith("op_edit_interval:"))
+async def cb_operator_edit_interval(callback: CallbackQuery, db_user: dict | None):
+    if not is_operator_or_admin(db_user):
+        await callback.answer("⛔️ Insufficient permissions.", show_alert=True)
+        return
+    trip_id = int(callback.data.split(":")[1])
+    trip = await get_trip_details(DB_PATH, trip_id)
+    if not trip or trip["status"] not in ("PLANNED", "ACTIVE"):
+        await callback.answer("This trip is no longer active or planned.", show_alert=True)
+        return
+    await callback.answer()
+    current_label = format_interval(trip["checkin_interval_min"])
+    await callback.message.edit_text(
+        f"⏱ <b>Change Check-in Interval — Trip #{trip_id}</b>\n"
+        f"📍 Route: <b>{trip['route_code']}</b>\n"
+        f"Current interval: <b>{current_label}</b>\n\n"
+        "Select a new check-in interval:",
+        reply_markup=build_interval_selection_keyboard(
+            callback_prefix=f"op_set_interval:{trip_id}",
+            cancel_callback=f"op_view_trip:{trip_id}",
+            current_interval=trip["checkin_interval_min"],
+            cancel_text="⬅️ Back to trip card"
+        )
+    )
+
+
+@operator_router.callback_query(F.data.startswith("op_set_interval:"))
+async def cb_operator_save_interval(callback: CallbackQuery, db_user: dict | None, bot: Bot):
+    if not is_operator_or_admin(db_user):
+        await callback.answer("⛔️ Insufficient permissions.", show_alert=True)
+        return
+    _, trip_id_str, new_interval_str = callback.data.split(":")
+    trip_id = int(trip_id_str)
+    new_interval = int(new_interval_str)
+    trip = await get_trip_details(DB_PATH, trip_id)
+    if not trip or trip["status"] not in ("PLANNED", "ACTIVE"):
+        await callback.answer("This trip is already completed or cancelled.", show_alert=True)
+        return
+    old_interval = trip["checkin_interval_min"]
+    if old_interval == new_interval:
+        await callback.answer("Interval is already set to this value.")
+        await callback.message.edit_text(
+            text=format_operator_trip_details(trip),
+            reply_markup=build_operator_trip_manage_keyboard(trip)
+        )
+        return
+    updated = await update_trip_interval(DB_PATH, trip_id, new_interval, db_user["id"])
+    if not updated:
+        await callback.answer("❌ Failed to update check-in interval.", show_alert=True)
+        return
+    old_label = format_interval(old_interval)
+    new_label = format_interval(new_interval)
+    logger.info(
+        f"Operator {db_user['full_name']} (id={db_user['id']}) changed check-in interval "
+        f"for trip #{trip_id} from '{old_label}' to '{new_label}'."
+    )
+    updated_trip = await get_trip_details(DB_PATH, trip_id)
+    await callback.answer(f"✅ Interval updated to: {new_label}")
+    # Оновлюємо картку поїздки у самого оператора
+    await callback.message.edit_text(
+        text=format_operator_trip_details(updated_trip),
+        reply_markup=build_operator_trip_manage_keyboard(updated_trip)
+    )
+    # Сповіщаємо всіх учасників екіпажу про зміну нормативу чекіну
+    for member in updated_trip["crew"]:
+        try:
+            await bot.send_message(
+                chat_id=member["tg_id"],
+                text=(
+                    f"🔔 <b>Check-in interval updated — Trip #{trip_id} ({updated_trip['route_code']})</b>\n\n"
+                    f"Operator <b>{db_user['full_name']}</b> changed your check-in interval:\n"
+                    f"• Previous: <i>{old_label}</i>\n"
+                    f"• New: <b>{new_label}</b>"
+                )
+            )
+        except Exception as e:
+            logger.warning(f"Failed to notify crew member {member['tg_id']} about interval change: {e}")
+    # Логуємо зміну в групі моніторингу
+    await notify_monitoring(
+        bot,
+        text=(
+            f"⏱ <b>CHECK-IN INTERVAL UPDATED — Trip #{trip_id}</b>\n"
+            f"📍 Route: <b>{updated_trip['route_code']}</b>\n"
+            f"🔄 Changed: <i>{old_label}</i> → <b>{new_label}</b>\n"
+            f"👤 Operator: <b>{db_user['full_name']}</b>"
+        )
     )
