@@ -1,9 +1,14 @@
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from config import CHECKIN_INTERVAL_OPTIONS
 
 
 USERS_PER_PAGE = 8
 
+
+# =====================================================================
+# ДОПОМІЖНІ ФУНКЦІЇ ПАГІНАЦІЇ ТА ІКОНОК
+# =====================================================================
 def _paginate_slice(items: list, page: int, per_page: int = USERS_PER_PAGE) -> tuple[list, int, int]:
     """
     Повертає: (зріз_елементів_сторінки, безпечний_індекс_сторінки, всього_сторінок).
@@ -34,8 +39,24 @@ def _build_pagination_row(prefix: str, page: int, total_pages: int) -> list[Inli
     return [prev_btn, counter_btn, next_btn]
 
 
+def get_trip_status_icon(trip: dict) -> str:
+    """Визначає іконку стану поїздки для кнопок та списків."""
+    if trip["status"] == "PLANNED":
+        return "📅"
+    minutes_ago = max(0, trip["minutes_ago"] or 0)
+    interval = trip.get("checkin_interval_min") or 0
+    if interval > 0 and minutes_ago >= interval:
+        return "🔴"
+    if trip["pending_request_sent_at"]:
+        return "🟡"
+    return "🟢"
+
+
+# =====================================================================
+# КЛАВІАТУРИ МАНДРІВНИКА (Керування поїздкою та створення)
+# =====================================================================
 def build_planned_trip_keyboard(trip_id: int) -> InlineKeyboardMarkup:
-    '''Клавіатура для запланованої поїздки.'''
+    """Клавіатура для запланованої поїздки."""
     builder = InlineKeyboardBuilder()
     builder.button(text="🚀 On the Road (Start Now)", callback_data=f"trv_start_now:{trip_id}")
     builder.button(text="❌ Cancel the trip", callback_data=f"trv_cancel_planned:{trip_id}")
@@ -55,7 +76,7 @@ def build_traveler_trip_keyboard(trip_id: int) -> InlineKeyboardMarkup:
 
 
 def build_close_confirm_keyboard(trip_id: int) -> InlineKeyboardMarkup:
-    '''Підтвердження закриття поїздки.'''
+    """Підтвердження закриття поїздки."""
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Yes, we've arrived", callback_data=f"trv_close_confirm:{trip_id}")
     builder.button(text="⬅️ Back to the trip", callback_data=f"trv_refresh:{trip_id}")
@@ -64,7 +85,7 @@ def build_close_confirm_keyboard(trip_id: int) -> InlineKeyboardMarkup:
 
 
 def build_cancel_note_keyboard(trip_id: int) -> InlineKeyboardMarkup:
-    '''Скасування вводу примітки.'''
+    """Скасування вводу примітки."""
     builder = InlineKeyboardBuilder()
     builder.button(text="❌ Cancel", callback_data=f"trv_refresh:{trip_id}")
     return builder.as_markup()
@@ -86,7 +107,7 @@ def build_checkin_response_keyboard(trip_id: int) -> InlineKeyboardMarkup:
 
 
 def build_help_comment_keyboard(trip_id: int) -> InlineKeyboardMarkup:
-    """Клавіатура під час запиту про допомогу"""
+    """Клавіатура під час запиту про допомогу."""
     builder = InlineKeyboardBuilder()
     builder.button(
         text="🚨 Send without comment",
@@ -100,28 +121,89 @@ def build_help_comment_keyboard(trip_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_trip_status_icon(trip: dict) -> str:
-    '''Визначає іконку стану поїздки для кнопок та списків.'''
-    if trip["status"] == "PLANNED":
-        return "📅"
-    minutes_ago = max(0, trip["minutes_ago"] or 0)
-    interval = trip["checkin_interval_min"]
-    if interval > 0 and minutes_ago >= interval:
-        return "🔴"
-    if trip["pending_request_sent_at"]:
-        return "🟡"
-    return "🟢"
+def build_cancel_creation_keyboard() -> InlineKeyboardMarkup:
+    """Кнопка скасування під час текстових кроків оформлення поїздки."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Cancel creation", callback_data="trip_create_cancel")
+    return builder.as_markup()
 
 
+def build_companions_keyboard(
+    other_users: list[dict], selected_ids: list[int], page: int = 0
+) -> InlineKeyboardMarkup:
+    """Клавіатура мульти-вибору супутників із пагінацією при створенні поїздки."""
+    builder = InlineKeyboardBuilder()
+    selected_set = set(selected_ids)
+    # Верхня кнопка підтвердження (відображає загальну кількість обраних по всіх сторінках)
+    if not selected_set:
+        confirm_text = "👤 Traveling solo — Finish setup"
+    else:
+        confirm_text = f"✅ Confirm group (companions: {len(selected_set)})"
+    builder.row(
+        InlineKeyboardButton(text=confirm_text, callback_data="trip_confirm_companions")
+    )
+    # Список користувачів на поточній сторінці (із зазначенням відділу)
+    page_users, safe_page, total_pages = _paginate_slice(other_users, page)
+    for u in page_users:
+        mark = "✅" if u["id"] in selected_set else "⬜️"
+        team_str = f" [{u['team']}]" if u.get("team") else ""
+        builder.row(
+            InlineKeyboardButton(
+                text=f"{mark} {u['full_name']}{team_str}",
+                callback_data=f"trip_toggle_comp:{u['id']}"
+            )
+        )
+    # Ряд пагінації (з'являється автоматично, коли людей більше ніж USERS_PER_PAGE)
+    if total_pages > 1:
+        builder.row(*_build_pagination_row("trip_comp_page", safe_page, total_pages))
+    # Нижня кнопка скасування
+    builder.row(
+        InlineKeyboardButton(text="❌ Cancel", callback_data="trip_create_cancel")
+    )
+    return builder.as_markup()
+
+
+def build_interval_selection_keyboard(
+    callback_prefix: str,
+    cancel_callback: str,
+    current_interval: int | None = None,
+    cancel_text: str = "❌ Cancel"
+) -> InlineKeyboardMarkup:
+    """
+    Універсальна клавіатура вибору інтервалу чекіну (опції беруться з config.py).
+    Якщо передано current_interval — позначає поточне значення галочкою (для режиму редагування оператором).
+    """
+    builder = InlineKeyboardBuilder()
+    for minutes, label in CHECKIN_INTERVAL_OPTIONS:
+        mark = "✅ " if current_interval == minutes else ""
+        builder.row(
+            InlineKeyboardButton(
+                text=f"{mark}{label}",
+                callback_data=f"{callback_prefix}:{minutes}"
+            )
+        )
+    builder.row(
+        InlineKeyboardButton(text=cancel_text, callback_data=cancel_callback)
+    )
+    return builder.as_markup()
+
+
+# =====================================================================
+# КЛАВІАТУРИ ОПЕРАТОРА (Дашборд та керування поїздкою)
+# =====================================================================
 def build_operator_dashboard_keyboard(trips: list[dict]) -> InlineKeyboardMarkup:
-    '''Будує список інлайн-кнопок для переходу в деталі кожної поїздки.'''
+    """Будує список інлайн-кнопок для переходу в деталі кожної поїздки."""
     builder = InlineKeyboardBuilder()
     for t in trips:
         icon = get_trip_status_icon(t)
         leader_name = next((m["full_name"] for m in t["crew"] if m["is_leader"]), "Crew")
         if t["status"] == "ACTIVE":
-            mins = max(0, t["minutes_ago"] or 0)
-            time_info = f"{mins} min ago"
+            interval = t.get("checkin_interval_min") or 0
+            if interval > 0:
+                mins = max(0, t["minutes_ago"] or 0)
+                time_info = f"{mins} min ago"
+            else:
+                time_info = "Start/Finish"
         else:
             time_info = "Planned"
         builder.button(
@@ -152,83 +234,11 @@ def build_operator_trip_manage_keyboard(trip: dict) -> InlineKeyboardMarkup:
 
 
 def build_operator_close_confirm_keyboard(trip_id: int) -> InlineKeyboardMarkup:
-    '''Підтвердження примусового закриття поїздки оператором.'''
+    """Підтвердження примусового закриття поїздки оператором."""
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Yes, close the trip", callback_data=f"op_force_close_confirm:{trip_id}")
     builder.button(text="⬅️ Cancel", callback_data=f"op_view_trip:{trip_id}")
     builder.adjust(1)
-    return builder.as_markup()
-
-
-# =====================================================================
-# КЛАВІАТУРИ СТВОРЕННЯ ПОЇЗДКИ (Мандрівник)
-# =====================================================================
-def build_cancel_creation_keyboard() -> InlineKeyboardMarkup:
-    """Кнопка скасування під час текстових кроків оформлення поїздки."""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="❌ Cancel creation", callback_data="trip_create_cancel")
-    return builder.as_markup()
-
-
-def build_companions_keyboard(
-    other_users: list[dict], selected_ids: list[int], page: int = 0
-) -> InlineKeyboardMarkup:
-    """Клавіатура мульти-вибору супутників із пагінацією при створенні поїздки."""
-    builder = InlineKeyboardBuilder()
-    # Верхня кнопка підтвердження (відображає загальну кількість обраних по всіх сторінках)
-    if not selected_ids:
-        confirm_text = "👤 Traveling solo — Finish setup"
-    else:
-        confirm_text = f"✅ Confirm group (companions: {len(selected_ids)})"
-    builder.row(
-        InlineKeyboardButton(text=confirm_text, callback_data="trip_confirm_companions")
-    )
-    # Список користувачів на поточній сторінці
-    page_users, safe_page, total_pages = _paginate_slice(other_users, page)
-    for u in page_users:
-        mark = "✅" if u["id"] in selected_ids else "⬜️"
-        builder.row(
-            InlineKeyboardButton(
-                text=f"{mark} {u['full_name']}",
-                callback_data=f"trip_toggle_comp:{u['id']}"
-            )
-        )
-    # Ряд пагінації (з'являється автоматично, коли людей більше ніж USERS_PER_PAGE)
-    if total_pages > 1:
-        builder.row(*_build_pagination_row("trip_comp_page", safe_page, total_pages))
-    # Нижня кнопка скасування
-    builder.row(
-        InlineKeyboardButton(text="❌ Cancel", callback_data="trip_create_cancel")
-    )
-    return builder.as_markup()
-
-
-def build_interval_selection_keyboard(
-    callback_prefix: str, cancel_callback: str,
-    current_interval: int | None = None, cancel_text: str = "❌ Cancel"
-) -> InlineKeyboardMarkup:
-    """
-    Універсальна клавіатура вибору інтервалу чекіну (30, 60, 120 хв або 0 = Start/Finish only).
-    Якщо передано current_interval — позначає поточне значення галочкою (для режиму редагування оператором).
-    """
-    builder = InlineKeyboardBuilder()
-    options = [
-        (30, "🔴 Every 30 min (High risk)"),
-        (60, "🟠 Every 60 min (Elevated risk)"),
-        (120, "🟢 Every 120 min (Standard)"),
-        (0, "⚪️ Start / Finish only")
-    ]
-    for minutes, label in options:
-        mark = "✅ " if current_interval == minutes else ""
-        builder.row(
-            InlineKeyboardButton(
-                text=f"{mark}{label}",
-                callback_data=f"{callback_prefix}:{minutes}"
-            )
-        )
-    builder.row(
-        InlineKeyboardButton(text=cancel_text, callback_data=cancel_callback)
-    )
     return builder.as_markup()
 
 
