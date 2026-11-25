@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from html import escape
 import logging
 import re
@@ -45,6 +45,7 @@ MAX_NOTE_LENGTH = 500
 class NewTripFSM(StatesGroup):
     waiting_for_origin = State()
     waiting_for_destination = State()
+    waiting_for_departure_date = State()
     waiting_for_departure_time = State()
     waiting_for_interval = State()
     waiting_for_companions = State()
@@ -68,56 +69,55 @@ def utc_str_to_kyiv_str(utc_str: str) -> str:
         return utc_str
 
 
-def parse_kyiv_departure_time(text: str) -> tuple[datetime | None, str | None]:
+def parse_strict_kyiv_date(text: str) -> tuple[date | None, str | None]:
     """
-    Парсить введений користувачем час (за Києвом) через регулярні вирази.
-    Підтримує формати:
-    - Тільки час: '08:30', '8:30', '08.30', '08-30'
-    - Дата і час: '18.11 08:30', '18.11. 08:30', '18.11.26 08:30', '18.11.2026 08:30'
-    Повертає (datetime_utc, kyiv_formatted_str) або (None, None).
+    Парсить дату у форматі DD.MM.YYYY та перевіряє, що вона не в минулому (за Києвом).
+    Повертає (date_obj, None) або (None, error_message).
     """
     raw = text.strip()
-    now_kyiv = datetime.now(KYIV_TZ)
+    # Сувора перевірка формату (відсікає 2-значний рік, зайві роздільники та пропущені нулі)
+    if not re.fullmatch(r"\d{2}\.\d{2}\.\d{4}", raw):
+        example = datetime.now(KYIV_TZ).strftime("%d.%m.%Y")
+        return None, (
+            "❌ Invalid date format.\n"
+            f"Please use strict format <code>DD.MM.YYYY</code> (e.g., <code>{example}</code>):"
+        )
     try:
-        # Варіант 1: Тільки час (наприклад: 08:30, 8.30, 14-15)
-        time_only_match = re.match(r"^(\d{1,2})[:.\-](\d{2})$", raw)
-        if time_only_match:
-            hour = int(time_only_match.group(1))
-            minute = int(time_only_match.group(2))
-            dt_kyiv = now_kyiv.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            # Якщо вказаний час сьогодні вже минув більш ніж на 5 хв — плануємо на завтра
-            if dt_kyiv < now_kyiv - timedelta(minutes=5):
-                dt_kyiv += timedelta(days=1)
-        else:
-            # Варіант 2: Дата і час (наприклад: 18.11 08:30, 18.11.26 08.30, 18.11.2026 08:30)
-            date_time_match = re.match(
-                r"^(\d{1,2})[./\-](\d{1,2})(?:[./\-](\d{2,4}))?\.?\s+(\d{1,2})[:.\-](\d{2})$",
-                raw
-            )
-            if not date_time_match:
-                return None, None
-            day = int(date_time_match.group(1))
-            month = int(date_time_match.group(2))
-            year_str = date_time_match.group(3)
-            hour = int(date_time_match.group(4))
-            minute = int(date_time_match.group(5))
-            if year_str:
-                year = int(year_str)
-                if year < 100:
-                    year += 2000
-            else:
-                year = now_kyiv.year
-            # Прямий конструктор (перевіряє існування дати та діапазон 0..23 і 0..59)
-            dt_kyiv = datetime(year, month, day, hour, minute, tzinfo=KYIV_TZ)
-            # Якщо рік не вказували, а дата вже в минулому (напр. у грудні ввели січень)
-            if not year_str and dt_kyiv < now_kyiv - timedelta(days=30):
-                dt_kyiv = datetime(year + 1, month, day, hour, minute, tzinfo=KYIV_TZ)
-        dt_utc = dt_kyiv.astimezone(UTC_TZ)
-        kyiv_label = dt_kyiv.strftime("%d.%m.%Y at %H:%M")
-        return dt_utc, kyiv_label
-    except ValueError as e:
-        logger.warning(f"Failed to parse departure time '{raw}': {e}")
-        return None, None
+        parsed_date = datetime.strptime(raw, "%d.%m.%Y").date()
+    except ValueError:
+        return None, (
+            "❌ This calendar date does not exist.\n"
+            "Check the day and month and enter the date again (<code>DD.MM.YYYY</code>):"
+        )
+    today_kyiv = datetime.now(KYIV_TZ).date()
+    if parsed_date < today_kyiv:
+        return None, (
+            "❌ Departure date cannot be in the past.\n"
+            f"Enter today's date (<code>{today_kyiv.strftime('%d.%m.%Y')}</code>) or a future date:"
+        )
+    return parsed_date, None
+
+
+def parse_strict_kyiv_time(text: str) -> tuple[time | None, str | None]:
+    """
+    Парсить час у 24-годинному форматі HH:MM.
+    Повертає (time_obj, None) або (None, error_message).
+    """
+    raw = text.strip()
+    # Захищає від пастки strptime, де '09:5' мовчки парситься як 09:05
+    if not re.fullmatch(r"\d{2}:\d{2}", raw):
+        return None, (
+            "❌ Invalid time format.\n"
+            "Please use strict 24-hour format <code>HH:MM</code> (e.g., <code>08:30</code> or <code>14:00</code>):"
+        )
+    try:
+        parsed_time = datetime.strptime(raw, "%H:%M").time()
+    except ValueError:
+        return None, (
+            "❌ Invalid time value (hours must be 00–23, minutes 00–59).\n"
+            "Please enter the time again in format <code>HH:MM</code>:"
+        )
+    return parsed_time, None
 
 
 def format_crew_list(crew: list[dict]) -> str:
@@ -254,7 +254,7 @@ async def cmd_new_trip(message: Message, db_user: dict | None, state: FSMContext
     await state.clear()
     await message.answer(
         "🚗 <b>New Trip Setup</b>\n\n"
-        "Step 1/5. Enter the <b>point of departure</b> (e.g., <i>Kyiv</i>):",
+        "Step 1/6. Enter the <b>point of departure</b> (e.g., <i>Kyiv</i>):",
         reply_markup=build_cancel_creation_keyboard()
     )
     await state.set_state(NewTripFSM.waiting_for_origin)
@@ -313,7 +313,7 @@ async def process_origin(message: Message, state: FSMContext):
     await state.update_data(origin=origin)
     await message.answer(
         f"Departure: <b>{escape(origin)}</b>\n\n"
-        "Step 2/5. Enter the <b>destination</b> (e.g., <i>Dnipro</i>):",
+        "Step 2/6. Enter the <b>destination</b> (e.g., <i>Dnipro</i>):",
         reply_markup=build_cancel_creation_keyboard()
     )
     await state.set_state(NewTripFSM.waiting_for_destination)
@@ -331,33 +331,84 @@ async def process_destination(message: Message, state: FSMContext):
     data = await state.get_data()
     origin = data.get("origin", "")
     await state.update_data(destination=destination)
-    now_str = datetime.now(KYIV_TZ).strftime("%d.%m %H:%M")
+    today_str = datetime.now(KYIV_TZ).strftime("%d.%m.%Y")
     await message.answer(
         f"Route: <b>{escape(origin)} → {escape(destination)}</b>\n\n"
-        "Step 3/5. Enter the <b>departure time</b> (Kyiv time):\n"
-        "• Format <code>HH:MM</code> (e.g., <code>09:30</code>) — for today/tomorrow\n"
-        f"• Format <code>DD.MM HH:MM</code> (e.g., <code>{now_str}</code>) — for a specific date",
+        "Step 3/6. Enter the <b>departure date</b> (Kyiv time) in format <code>DD.MM.YYYY</code> "
+        f"(e.g., <code>{today_str}</code>):",
+        reply_markup=build_cancel_creation_keyboard()
+    )
+    await state.set_state(NewTripFSM.waiting_for_departure_date)
+
+
+@traveler_router.message(NewTripFSM.waiting_for_departure_date)
+async def process_departure_date(message: Message, state: FSMContext):
+    # Обробка нетекстових повідомлень (фото/стікер/геолокація), щоб користувач не "зависав"
+    if not message.text:
+        await message.answer(
+            "❌ Please send the departure date as text in format <code>DD.MM.YYYY</code>:",
+            reply_markup=build_cancel_creation_keyboard()
+        )
+        return
+    parsed_date, error_msg = parse_strict_kyiv_date(message.text)
+    if not parsed_date:
+        logger.warning(f"Invalid departure date input: '{message.text.strip()}'")
+        await message.answer(error_msg, reply_markup=build_cancel_creation_keyboard())
+        return
+    date_display = parsed_date.strftime("%d.%m.%Y")
+    await state.update_data(
+        departure_date_iso=parsed_date.isoformat(),
+        departure_date_display=date_display
+    )
+    await message.answer(
+        f"📅 Departure date: <b>{date_display}</b>\n\n"
+        "Step 4/6. Enter the <b>departure time</b> (Kyiv time) in 24-hour format <code>HH:MM</code> "
+        "(e.g., <code>08:30</code> or <code>14:00</code>):",
         reply_markup=build_cancel_creation_keyboard()
     )
     await state.set_state(NewTripFSM.waiting_for_departure_time)
 
 
-@traveler_router.message(NewTripFSM.waiting_for_departure_time, F.text)
+@traveler_router.message(NewTripFSM.waiting_for_departure_time)
 async def process_departure_time(message: Message, state: FSMContext):
-    dt_utc, kyiv_label = parse_kyiv_departure_time(message.text)
-    if not dt_utc:
+    if not message.text:
         await message.answer(
-            "❌ Invalid time format. Enter, for example, <code>08:30</code> or <code>18.11 08:30</code>:",
+            "❌ Please send the departure time as text in format <code>HH:MM</code>:",
             reply_markup=build_cancel_creation_keyboard()
         )
         return
+    parsed_time, error_msg = parse_strict_kyiv_time(message.text)
+    if not parsed_time:
+        logger.warning(f"Invalid departure time input: '{message.text.strip()}'")
+        await message.answer(error_msg, reply_markup=build_cancel_creation_keyboard())
+        return
+    data = await state.get_data()
+    date_iso = data.get("departure_date_iso")
+    if not date_iso:
+        await state.clear()
+        await message.answer("❌ Session expired. Please start trip setup again.")
+        return
+    parsed_date = date.fromisoformat(date_iso)
+    dt_kyiv = datetime.combine(parsed_date, parsed_time, tzinfo=KYIV_TZ)
+    # Захист від одруківки часу для сьогоднішньої дати (напр. 08:30 замість 18:30) із 5-хв буфером
+    now_kyiv = datetime.now(KYIV_TZ)
+    if dt_kyiv < now_kyiv - timedelta(minutes=5):
+        await message.answer(
+            f"❌ Time <b>{parsed_time.strftime('%H:%M')}</b> on <b>{data['departure_date_display']}</b> "
+            "has already passed.\n"
+            "Enter a future time (<code>HH:MM</code>) or tap Cancel to choose another date:",
+            reply_markup=build_cancel_creation_keyboard()
+        )
+        return
+    dt_utc = dt_kyiv.astimezone(UTC_TZ)
+    kyiv_label = dt_kyiv.strftime("%d.%m.%Y at %H:%M")
     await state.update_data(
         planned_start_utc=dt_utc.strftime("%Y-%m-%d %H:%M:%S"),
         kyiv_departure_label=kyiv_label
     )
     await message.answer(
-        f"🕒 Departure time: <b>{kyiv_label}</b>\n\n"
-        "Step 4/5. Select the <b>check-in interval</b> according to the route risk level:",
+        f"🕒 Departure: <b>{kyiv_label}</b>\n\n"
+        "Step 5/6. Select the <b>check-in interval</b> according to the route risk level:",
         reply_markup=build_interval_selection_keyboard(
             callback_prefix="trip_set_interval",
             cancel_callback="trip_create_cancel",
@@ -381,7 +432,7 @@ async def process_interval_selection(callback: CallbackQuery, db_user: dict, sta
     )
     await callback.message.edit_text(
         f"⏱ Check-in interval: <b>{format_interval(interval_min)}</b>\n\n"
-        f"Step 5/5. You (<b>{escape(db_user['full_name'])}</b>) are automatically assigned as the trip leader.\n"
+        f"Step 6/6. You (<b>{escape(db_user['full_name'])}</b>) are automatically assigned as the trip leader.\n"
         "If traveling solo — tap the top button. If traveling in a group — select your companions:",
         reply_markup=build_companions_keyboard(other_users, [], page=0)
     )
