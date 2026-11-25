@@ -144,6 +144,7 @@ async def delete_user(db_path: str, user_id: int) -> bool:
             await db.execute("UPDATE trips SET last_checkin_by = NULL WHERE last_checkin_by = ?", (user_id,))
             await db.execute("UPDATE trips SET pending_request_by = NULL WHERE pending_request_by = ?", (user_id,))
             await db.execute("UPDATE checkin_events SET actor_user_id = NULL WHERE actor_user_id = ?", (user_id,))
+            await db.execute("UPDATE trips SET help_requested_by = NULL WHERE help_requested_by = ?", (user_id,))
             # Видаляємо участь у поїздках та сам профіль
             await db.execute("DELETE FROM trip_participants WHERE user_id = ?", (user_id,))
             cursor = await db.execute("DELETE FROM users WHERE id = ?", (user_id,))
@@ -165,7 +166,9 @@ async def _fetch_trip_details(db: aiosqlite.Connection, trip_id: int) -> dict | 
         t.id, t.route_code, t.origin, t.destination, t.status,
         t.checkin_interval_min, t.started_at, t.last_checkin_at,
         t.pending_request_sent_at,
+        t.help_requested_at, t.help_request_note,
         u.full_name AS last_checkin_user_name,
+        hu.full_name AS help_requested_user_name,
         CAST((julianday('now') - julianday(t.last_checkin_at)) * 1440 AS INTEGER) AS minutes_ago,
         (
             SELECT ce.note
@@ -178,6 +181,7 @@ async def _fetch_trip_details(db: aiosqlite.Connection, trip_id: int) -> dict | 
         ) AS last_checkin_note
     FROM trips t
     LEFT JOIN users u ON t.last_checkin_by = u.id
+    LEFT JOIN users hu ON t.help_requested_by = hu.id
     WHERE t.id = ?
     """
     crew_query = """
@@ -383,7 +387,7 @@ async def record_help_request(
     db_path: str, trip_id: int, actor_user_id: int, note: str | None = None
 ) -> bool:
     """
-    Записує подію 'HELP_REQUESTED' в аудит-лог checkin_events,
+    Активує SOS-стан на поїздці, записує подію 'HELP_REQUESTED' в аудит-лог,
     оновлює час останнього зв'язку та скидає прапорці нагадувань Watchdog.
     """
     try:
@@ -396,10 +400,13 @@ async def record_help_request(
                     last_checkin_by = ?,
                     operator_reminded_at = NULL,
                     pending_request_sent_at = NULL,
-                    pending_request_by = NULL
+                    pending_request_by = NULL,
+                    help_requested_at = CURRENT_TIMESTAMP,
+                    help_requested_by = ?,
+                    help_request_note = ?
                 WHERE id = ? AND status = 'ACTIVE'
                 """,
-                (actor_user_id, trip_id)
+                (actor_user_id, actor_user_id, note, trip_id)
             )
             if cursor.rowcount == 0:
                 return False
@@ -414,6 +421,45 @@ async def record_help_request(
             return True
     except Exception as e:
         logger.error(f"Failed to record HELP_REQUESTED for trip #{trip_id}: {e}")
+        return False
+
+
+async def resolve_help_request(
+    db_path: str, trip_id: int, actor_user_id: int, note: str = "Help request resolved"
+) -> bool:
+    """
+    Знімає активний SOS-стан із поїздки, перезапускає таймер чекіну
+    та фіксує подію 'HELP_RESOLVED' в аудит-лозі.
+    """
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON;")
+            cursor = await db.execute(
+                """
+                UPDATE trips
+                SET help_requested_at = NULL,
+                    help_requested_by = NULL,
+                    help_request_note = NULL,
+                    last_checkin_at = CURRENT_TIMESTAMP,
+                    last_checkin_by = ?,
+                    operator_reminded_at = NULL
+                WHERE id = ? AND status = 'ACTIVE' AND help_requested_at IS NOT NULL
+                """,
+                (actor_user_id, trip_id)
+            )
+            if cursor.rowcount == 0:
+                return False
+            await db.execute(
+                """
+                INSERT INTO checkin_events (trip_id, actor_user_id, event_type, note)
+                VALUES (?, ?, 'HELP_RESOLVED', ?)
+                """,
+                (trip_id, actor_user_id, note)
+            )
+            await db.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Failed to resolve help request for trip #{trip_id}: {e}")
         return False
 
 
@@ -467,7 +513,10 @@ async def close_trip(db_path: str, trip_id: int, actor_user_id: int) -> bool:
                     last_checkin_by = ?,
                     operator_reminded_at = NULL,
                     pending_request_sent_at = NULL,
-                    pending_request_by = NULL
+                    pending_request_by = NULL,
+                    help_requested_at = NULL,
+                    help_requested_by = NULL,
+                    help_request_note = NULL
                 WHERE id = ? AND status = 'ACTIVE'
                 """,
                 (actor_user_id, trip_id)
@@ -535,20 +584,25 @@ async def get_all_monitored_trips(db_path: str) -> list[dict]:
     WHERE status IN ('ACTIVE', 'PLANNED')
     ORDER BY
         CASE
+            WHEN status = 'ACTIVE' AND help_requested_at IS NOT NULL THEN 0
             WHEN status = 'ACTIVE' AND checkin_interval_min > 0 THEN 1
             WHEN status = 'ACTIVE' THEN 2
             ELSE 3
         END ASC,
         CASE
-            WHEN status = 'ACTIVE' AND checkin_interval_min > 0
+            WHEN status = 'ACTIVE' AND help_requested_at IS NOT NULL
+            THEN datetime(help_requested_at)
+        END ASC,
+        CASE
+            WHEN status = 'ACTIVE' AND help_requested_at IS NULL AND checkin_interval_min > 0
             THEN julianday(last_checkin_at) + (checkin_interval_min / 1440.0)
         END ASC,
         CASE
-            WHEN status = 'ACTIVE' AND checkin_interval_min <= 0
+            WHEN status = 'ACTIVE' AND help_requested_at IS NULL AND checkin_interval_min <= 0
             THEN (CASE WHEN pending_request_sent_at IS NOT NULL THEN 0 ELSE 1 END)
         END ASC,
         CASE
-            WHEN status = 'ACTIVE' AND checkin_interval_min <= 0
+            WHEN status = 'ACTIVE' AND help_requested_at IS NULL AND checkin_interval_min <= 0
             THEN datetime(started_at)
         END ASC,
         CASE

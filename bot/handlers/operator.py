@@ -15,6 +15,7 @@ from database.queries import (
     get_trip_details,
     mark_operator_ping_sent,
     update_trip_interval,
+    resolve_help_request,
 )
 from handlers.traveler import (
     format_crew_list,
@@ -66,9 +67,11 @@ def format_dashboard_text(trips: list[dict]) -> str:
         )
     active_trips = [t for t in trips if t["status"] == "ACTIVE"]
     planned_trips = [t for t in trips if t["status"] == "PLANNED"]
+    sos_count = sum(1 for t in active_trips if t.get("help_requested_at"))
+    sos_header = f" | 🆘 SOS: <b>{sos_count}</b>" if sos_count else ""
     lines = [
         f"📋 <b>Trip monitoring dashboard</b> (updated at {now_str})",
-        f"Active: <b>{len(active_trips)}</b> | Planned: <b>{len(planned_trips)}</b>\n"
+        f"Active: <b>{len(active_trips)}</b> | Planned: <b>{len(planned_trips)}</b>{sos_header}\n"
     ]
     if active_trips:
         lines.append("🚗 <b>ACTIVE TRIPS:</b>")
@@ -79,6 +82,16 @@ def format_dashboard_text(trips: list[dict]) -> str:
             crew_count = len(t["crew"])
             leader = _format_leader_label(t["crew"])
             status_note = ""
+            if t.get("help_requested_at"):
+                help_time = utc_str_to_kyiv_str(t["help_requested_at"])
+                raw_note = t.get("help_request_note") or ""
+                short_note = (raw_note[:57] + "...") if len(raw_note) > 60 else raw_note
+                note_part = f" — <i>{escape(short_note)}</i>" if short_note else ""
+                lines.append(
+                    f"{icon} <b>#{t['id']} {escape(t['route_code'])}</b> ({crew_count} pax, leader: {leader})\n"
+                    f"   └ 🚨 <b>HELP REQUESTED ({help_time})</b>{note_part}"
+                )
+                continue
             if interval > 0 and mins >= interval:
                 status_note = " — ⚠️ <b>CHECK-IN OVERDUE!</b>"
             elif t["pending_request_sent_at"]:
@@ -136,7 +149,15 @@ def format_operator_trip_details(trip: dict) -> str:
     last_time_kyiv = utc_str_to_kyiv_str(trip["last_checkin_at"])
     start_time_kyiv = utc_str_to_kyiv_str(trip["started_at"])
     alert_banner = ""
-    if interval > 0 and mins >= interval:
+    if trip.get("help_requested_at"):
+        help_time_kyiv = utc_str_to_kyiv_str(trip["help_requested_at"])
+        help_by_safe = escape(trip.get("help_requested_user_name") or "Crew member")
+        help_note_safe = escape(trip["help_request_note"]) if trip.get("help_request_note") else "No comment (urgent alert)"
+        alert_banner = (
+            f"\n🚨🆘 <b>ACTIVE HELP REQUEST ({help_time_kyiv}, from: {help_by_safe})</b>\n"
+            f"💬 <b>Details:</b> <i>{help_note_safe}</i>\n"
+        )
+    elif interval > 0 and mins >= interval:
         alert_banner = "\n🔴 <b>ATTENTION: The check-in interval has been exceeded! Send a request to the group.</b>\n"
     elif trip["pending_request_sent_at"]:
         ping_time_kyiv = utc_str_to_kyiv_str(trip["pending_request_sent_at"])
@@ -508,5 +529,69 @@ async def cb_operator_save_interval(callback: CallbackQuery, db_user: dict | Non
             f"📍 Route: <b>{route_safe}</b>\n"
             f"🔄 Changed: <i>{old_label}</i> → <b>{new_label}</b>\n"
             f"👤 Operator: <b>{operator_safe}</b>"
+        )
+    )
+
+
+@operator_router.callback_query(F.data.startswith("op_resolve_help:"))
+async def cb_operator_resolve_help(callback: CallbackQuery, db_user: dict | None, bot: Bot):
+    if not is_operator_or_admin(db_user):
+        await callback.answer("⛔️ Access denied.", show_alert=True)
+        return
+    trip_id = int(callback.data.split(":")[1])
+    trip = await get_trip_details(DB_PATH, trip_id)
+    if not trip or trip["status"] != "ACTIVE":
+        await callback.answer("The trip is no longer active.", show_alert=True)
+        return
+    if not trip.get("help_requested_at"):
+        await callback.answer("Help request has already been resolved.", show_alert=True)
+        try:
+            await callback.message.edit_text(
+                text=format_operator_trip_details(trip),
+                reply_markup=build_operator_trip_manage_keyboard(trip)
+            )
+        except TelegramBadRequest:
+            pass
+        return
+    resolved = await resolve_help_request(
+        DB_PATH, trip_id, db_user["id"], note="Resolved by monitoring operator"
+    )
+    if not resolved:
+        await callback.answer("Help request has already been resolved.", show_alert=True)
+        return
+    updated_trip = await get_trip_details(DB_PATH, trip_id)
+    if not updated_trip:
+        return
+    route_safe = escape(updated_trip["route_code"])
+    operator_safe = escape(db_user["full_name"])
+    logger.info(
+        f"Operator {db_user['full_name']} (id={db_user['id']}) resolved help request for trip #{trip_id}."
+    )
+    await callback.answer("✅ Help request marked as resolved.")
+    # Оновлюємо картку поїздки у самого оператора
+    await callback.message.edit_text(
+        text=format_operator_trip_details(updated_trip),
+        reply_markup=build_operator_trip_manage_keyboard(updated_trip)
+    )
+    # Сповіщаємо весь екіпаж та надсилаємо оновлену картку без SOS-статусу
+    await notify_other_crew_members(
+        bot,
+        updated_trip,
+        actor_user_id=-1,
+        text=(
+            f"✅ <b>Help request resolved — Trip #{trip_id} ({route_safe})</b>\n"
+            f"Operator <b>{operator_safe}</b> returned the trip to normal monitoring.\n\n"
+            + format_trip_card(updated_trip)
+        ),
+        reply_markup=build_traveler_trip_keyboard(trip_id, has_active_help=False)
+    )
+    # Фіксуємо закриття інциденту в групі моніторингу
+    await notify_monitoring(
+        bot,
+        text=(
+            f"✅ <b>HELP REQUEST RESOLVED — Trip #{trip_id}</b>\n"
+            f"📍 Route: <b>{route_safe}</b>\n"
+            f"👤 Resolved by operator: <b>{operator_safe}</b>\n"
+            "🟢 Trip status returned to normal monitoring."
         )
     )

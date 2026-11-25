@@ -20,6 +20,7 @@ from database.queries import (
     get_user_active_trips,
     record_checkin,
     record_help_request,
+    resolve_help_request,
 )
 from keyboards.inline import (
     build_cancel_creation_keyboard,
@@ -171,6 +172,19 @@ def format_trip_card(trip: dict) -> str:
         "\n⚠️ <b>Monitoring is awaiting your check-in with location!</b>\n"
         if trip["pending_request_sent_at"] else ""
     )
+    help_warning = ""
+    if trip.get("help_requested_at"):
+        help_time = utc_str_to_kyiv_str(trip["help_requested_at"])
+        help_by = escape(trip.get("help_requested_user_name") or "Crew member")
+        help_note_part = (
+            f"\n💬 Details: <i>{escape(trip['help_request_note'])}</i>"
+            if trip.get("help_request_note") else ""
+        )
+        help_warning = (
+            f"\n\n🚨 <b>ACTIVE HELP REQUEST ({help_time}, by {help_by})</b>"
+            f"{help_note_part}\n"
+            "<i>Tap \"Issue resolved\" once the situation is under control.</i>"
+        )
     return (
         f"🚗 <b>Active trip #{trip['id']}</b>\n"
         f"📍 Route: <b>{origin_safe} → {dest_safe}</b>\n"
@@ -179,6 +193,7 @@ def format_trip_card(trip: dict) -> str:
         f"🕒 Last check-in: <b>{minutes_ago} min ago</b> ({last_by_safe})"
         f"{location_line}"
         f"{ping_warning}"
+        f"{help_warning}"
     )
 
 
@@ -261,7 +276,10 @@ async def cmd_my_trip(message: Message, db_user: dict | None, state: FSMContext)
         kb = (
             build_planned_trip_keyboard(trip["id"])
             if trip["status"] == "PLANNED"
-            else build_traveler_trip_keyboard(trip["id"])
+            else build_traveler_trip_keyboard(
+                trip["id"],
+                has_active_help=bool(trip.get("help_requested_at"))
+            )
         )
         await message.answer(text=format_trip_card(trip), reply_markup=kb)
 
@@ -581,7 +599,10 @@ async def refresh_trip_card(callback: CallbackQuery, db_user: dict | None, state
     kb = (
         build_planned_trip_keyboard(trip_id)
         if trip["status"] == "PLANNED"
-        else build_traveler_trip_keyboard(trip_id)
+        else build_traveler_trip_keyboard(
+            trip_id,
+            has_active_help=bool(trip.get("help_requested_at"))
+        )
     )
     await callback.answer("Status updated")
     try:
@@ -644,7 +665,10 @@ async def process_checkin_note(message: Message, db_user: dict | None, state: FS
     actor_name_safe = escape(db_user["full_name"])
     await message.answer(
         text=format_trip_card(trip) + f"\n\n✅ <i>Check-in recorded: \"{note_safe}\"</i>",
-        reply_markup=build_traveler_trip_keyboard(trip_id)
+        reply_markup=build_traveler_trip_keyboard(
+            trip_id,
+            has_active_help=bool(trip.get("help_requested_at"))
+        )
     )
     kind_label = "requested by operator" if event_type == "REQUESTED_CHECKIN" else "scheduled"
     interval_min = trip.get("checkin_interval_min") or 0
@@ -760,7 +784,10 @@ async def process_help_without_comment(callback: CallbackQuery, db_user: dict | 
             format_trip_card(trip)
             + "\n\n🚨 <b>\"Need help\" request has been forwarded to monitoring! Standby for contact.</b>"
         ),
-        reply_markup=build_traveler_trip_keyboard(trip_id)
+        reply_markup=build_traveler_trip_keyboard(
+            trip_id,
+            has_active_help=bool(trip.get("help_requested_at"))
+        )
     )
 
 
@@ -790,7 +817,74 @@ async def process_help_with_comment(message: Message, db_user: dict | None, stat
             format_trip_card(trip)
             + f"\n\n🚨 <b>Help request (\"{escape(comment_text)}\") has been forwarded to monitoring! Standby for contact.</b>"
         ),
-        reply_markup=build_traveler_trip_keyboard(trip_id)
+        reply_markup=build_traveler_trip_keyboard(
+            trip_id,
+            has_active_help=bool(trip.get("help_requested_at"))
+        )
+    )
+
+
+@traveler_router.callback_query(F.data.startswith("trv_resolve_help:"))
+async def process_resolve_help(callback: CallbackQuery, db_user: dict | None, bot: Bot):
+    if not db_user:
+        return
+    trip_id = int(callback.data.split(":")[1])
+    trip = await get_trip_details(DB_PATH, trip_id)
+    if not trip or trip["status"] != "ACTIVE":
+        await callback.answer("The trip is no longer active.", show_alert=True)
+        return
+    if not _is_crew_member(trip, db_user["id"]):
+        await callback.answer("⛔️ You are not a member of this trip.", show_alert=True)
+        return
+    if not trip.get("help_requested_at"):
+        await callback.answer("Help request has already been resolved.", show_alert=True)
+        try:
+            await callback.message.edit_text(
+                text=format_trip_card(trip),
+                reply_markup=build_traveler_trip_keyboard(trip_id, has_active_help=False)
+            )
+        except TelegramBadRequest:
+            pass
+        return
+    resolved = await resolve_help_request(
+        DB_PATH, trip_id, db_user["id"], note="Resolved by crew member"
+    )
+    if not resolved:
+        await callback.answer("Help request has already been resolved.", show_alert=True)
+        return
+    updated_trip = await get_trip_details(DB_PATH, trip_id)
+    if not updated_trip:
+        return
+    route_safe = escape(updated_trip["route_code"])
+    actor_name_safe = escape(db_user["full_name"])
+    trip_card = format_trip_card(updated_trip)
+    normal_kb = build_traveler_trip_keyboard(trip_id, has_active_help=False)
+    logger.info(
+        f"Crew member {db_user['full_name']} (id={db_user['id']}) resolved help request for trip #{trip_id}."
+    )
+    await callback.answer("✅ Help status cleared!")
+    await callback.message.edit_text(
+        text=trip_card + "\n\n✅ <i>Help request marked as resolved. Monitoring returned to normal mode.</i>",
+        reply_markup=normal_kb
+    )
+    await notify_monitoring(
+        bot,
+        text=(
+            f"✅ <b>HELP REQUEST RESOLVED — Trip #{trip_id}</b>\n"
+            f"📍 Route: <b>{route_safe}</b>\n"
+            f"👤 Resolved by crew: <b>{actor_name_safe}</b>\n"
+            "🟢 Trip status returned to normal monitoring."
+        )
+    )
+    await notify_other_crew_members(
+        bot,
+        updated_trip,
+        actor_user_id=db_user["id"],
+        text=(
+            f"✅ <b>Trip #{trip_id} ({route_safe}):</b> "
+            f"{actor_name_safe} marked the help request as resolved.\n\n" + trip_card
+        ),
+        reply_markup=normal_kb
     )
 
 

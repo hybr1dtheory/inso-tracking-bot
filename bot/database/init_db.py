@@ -41,7 +41,11 @@ async def create_tables(db_path: str):
 
         operator_reminded_at TIMESTAMP,
         pending_request_sent_at TIMESTAMP,
-        pending_request_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+        pending_request_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        
+        help_requested_at TIMESTAMP,
+        help_requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        help_request_note TEXT
     );
     """
     CREATE_TRIP_PARTICIPANTS_TABLE = """
@@ -57,7 +61,7 @@ async def create_tables(db_path: str):
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         trip_id INTEGER REFERENCES trips(id) ON DELETE CASCADE,
         actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-        event_type TEXT NOT NULL, -- 'TRIP_PLANNED', 'TRIP_STARTED', 'SELF_CHECKIN', 'OPERATOR_PING_SENT', 'REQUESTED_CHECKIN', 'HELP_REQUESTED', 'INTERVAL_CHANGED', 'TRIP_CLOSED', 'TRIP_CANCELLED'
+        event_type TEXT NOT NULL, -- 'TRIP_PLANNED', 'TRIP_STARTED', 'SELF_CHECKIN', 'OPERATOR_PING_SENT', 'REQUESTED_CHECKIN', 'HELP_REQUESTED', 'INTERVAL_CHANGED', 'TRIP_CLOSED', 'TRIP_CANCELLED', 'HELP_RESOLVED'
         note TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );

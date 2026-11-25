@@ -43,6 +43,8 @@ def get_trip_status_icon(trip: dict) -> str:
     """Визначає іконку стану поїздки для кнопок та списків."""
     if trip["status"] == "PLANNED":
         return "📅"
+    if trip.get("help_requested_at"):
+        return "🆘"
     minutes_ago = max(0, trip["minutes_ago"] or 0)
     interval = trip.get("checkin_interval_min") or 0
     if interval > 0 and minutes_ago >= interval:
@@ -64,14 +66,16 @@ def build_planned_trip_keyboard(trip_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def build_traveler_trip_keyboard(trip_id: int) -> InlineKeyboardMarkup:
+def build_traveler_trip_keyboard(trip_id: int, has_active_help: bool = False) -> InlineKeyboardMarkup:
     """Основна клавіатура керування активною поїздкою."""
     builder = InlineKeyboardBuilder()
+    if has_active_help:
+        builder.button(text="✅ Issue resolved (Cancel SOS)", callback_data=f"trv_resolve_help:{trip_id}")
     builder.button(text="📍 Check-in (specify location)", callback_data=f"trv_note:{trip_id}")
     builder.button(text="🆘 Need help", callback_data=f"trv_help_ask:{trip_id}")
     builder.button(text="🔄 Update status", callback_data=f"trv_refresh:{trip_id}")
     builder.button(text="🏁 Arrived (Close Trip)", callback_data=f"trv_close_ask:{trip_id}")
-    builder.adjust(1, 2, 1)
+    builder.adjust(1, 1, 2, 1) if has_active_help else builder.adjust(1, 2, 1)
     return builder.as_markup()
 
 
@@ -198,12 +202,15 @@ def build_operator_dashboard_keyboard(trips: list[dict]) -> InlineKeyboardMarkup
         icon = get_trip_status_icon(t)
         leader_name = next((m["full_name"] for m in t["crew"] if m["is_leader"]), "Crew")
         if t["status"] == "ACTIVE":
-            interval = t.get("checkin_interval_min") or 0
-            if interval > 0:
-                mins = max(0, t["minutes_ago"] or 0)
-                time_info = f"{mins} min ago"
+            if t.get("help_requested_at"):
+                time_info = "SOS!"
             else:
-                time_info = "Start/Finish"
+                interval = t.get("checkin_interval_min") or 0
+                if interval > 0:
+                    mins = max(0, t["minutes_ago"] or 0)
+                    time_info = f"{mins} min ago"
+                else:
+                    time_info = "Start/Finish"
         else:
             time_info = "Planned"
         builder.button(
@@ -220,6 +227,8 @@ def build_operator_trip_manage_keyboard(trip: dict) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     trip_id = trip["id"]
     if trip["status"] == "ACTIVE":
+        if trip.get("help_requested_at"):
+            builder.button(text="✅ Mark help resolved", callback_data=f"op_resolve_help:{trip_id}")
         builder.button(text="📡 Send check-in request", callback_data=f"op_card_ping:{trip_id}")
         builder.button(text="⏱ Change check-in interval", callback_data=f"op_edit_interval:{trip_id}")
         builder.button(text="🔄 Refresh card", callback_data=f"op_view_trip:{trip_id}")
