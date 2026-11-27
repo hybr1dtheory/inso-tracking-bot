@@ -75,35 +75,41 @@ inso-tracking-bot/
 │   └── journey_db.sqlite3     # SQLite DB File (creates automatically)
 ├── .env.example               # Config template file
 ├── requirements.txt           # PIP dependencies
-└── README.md                  # Project documentation```
+└── README.md                  # Project documentation
+```
 
+---
 
-##🚀 Installation & Setup
+## 🚀 Installation & Setup
+
 Follow these steps to run the bot on a local machine or server.
 
-1. Clone the repository
-```Bash
+### 1. Clone the repository
+```bash
 git clone https://github.com/hybr1dtheory/inso-tracking-bot.git
-cd inso-tracking-bot```
+cd inso-tracking-bot
+```
 
-2. Create and activate a Virtual Environment
-```Bash
+### 2. Create and activate a Virtual Environment
+```bash
 python -m venv venv
 
 # Windows
 venv\Scripts\activate
 
 # macOS / Linux
-source venv/bin/activate```
+source venv/bin/activate
+```
 
-3. Install dependencies
-```Bash
+### 3. Install dependencies
+```bash
 pip install --upgrade pip
-pip install -r requirements.txt```
+pip install -r requirements.txt
+```
 
-4. Configure Environment Variables
-Create a .env file in the root directory based on .env.example:
-```Python
+### 4. Configure Environment Variables
+Create a `.env` file in the root directory based on `.env.example`:
+```dotenv
 # Telegram Bot API Token
 BOT_TOKEN=1234567890:ABCdefGhIJKlmNoPQRsTUVwxyZ
 
@@ -115,25 +121,37 @@ MONITORING_GROUP_ID=-1001234567890
 
 # Pre-registered admin's Telegram ID
 ADMIN_TG_ID=987654321
-ADMIN_FULL_NAME=John Doe```
+ADMIN_FULL_NAME=John Doe
+```
 
-5. Running the Bot
+### 5. Running the Bot
 Initiate the main script. On first startup, the required directory structure, indices, and database will initialize automatically:
-```Bash
-python bot/main.py```
-To run as a system service in Linux (production), use systemd. You can find example service templates in the deployment guides.
+```bash
+python bot/main.py
+```
 
-##📝 Database Schema Overview
+To run as a system service in Linux (production), use **systemd**. You can find example service templates in the deployment guides.
+
+---
+
+## 📝 Database Schema Overview
+
 The database consists of 4 interrelated tables:
-users: Standardizes demographics, role assignments (TRAVELER, OPERATOR, ADMIN), and organizational teams.
-trips: Stores locations, standard departure parameters, check-in timeouts, pending operator pings, and SOS states.
-trip_participants: Many-to-Many mapping for group assignments, designating a trip leader (is_leader = 1).
-checkin_events: Full-audit historical log storing timeline data (TRIP_PLANNED, TRIP_STARTED, SELF_CHECKIN, OPERATOR_PING_SENT, REQUESTED_CHECKIN, HELP_REQUESTED, HELP_RESOLVED, TRIP_CLOSED, TRIP_CANCELLED).
+- `users`: Standardizes demographics, role assignments (`TRAVELER`, `OPERATOR`, `ADMIN`), and organizational teams.
+- `trips`: Stores locations, standard departure parameters, check-in timeouts, pending operator pings, and SOS states.
+- `trip_participants`: Many-to-Many mapping for group assignments, designating a trip leader (`is_leader = 1`).
+- `checkin_events`: Full-audit historical log storing timeline data (`TRIP_PLANNED`, `TRIP_STARTED`, `SELF_CHECKIN`, `OPERATOR_PING_SENT`, `REQUESTED_CHECKIN`, `HELP_REQUESTED`, `HELP_RESOLVED`, `INTERVAL_CHANGED`, `TRIP_CLOSED`, `TRIP_CANCELLED`).
 
-##🔒 Security Notes
-Any user who is not pre-registered in the database will be blocked, and they will only be able to view their Telegram ID.
-Access to the /admin and /trips panels is rigorously scrutinized and cannot be bypassed.
-Strict input validation prevents HTML Injection (such as < or &), which would otherwise crash Telegram rendering loops.
+---
 
-##🤝 Contributing
-Contributions, issues, and feature requests are welcome! Feel free to check the issues page.
+## 🔒 Security Notes
+
+- Any user who is **not pre-registered** in the database will be blocked, and they will only be able to view their Telegram ID.
+- Access to the `/admin` and `/trips` panels is rigorously scrutinized and cannot be bypassed.
+- Strict input validation prevents HTML Injection (such as `<` or `&`), which would otherwise crash Telegram rendering loops.
+
+---
+
+## 🤝 Contributing
+
+Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/hybr1dtheory/inso-tracking-bot/issues).
